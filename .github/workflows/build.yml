@@ -1,0 +1,14 @@
+name: Build Geode Mod
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    name: Build Android Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: geode-sdk/build-geode-mod@main
+        with:
+          target: Android64
