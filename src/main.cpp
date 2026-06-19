@@ -46,7 +46,8 @@ class $modify(MyMenuLayer, MenuLayer) {
 		 * being useful for debugging and such. See this page for more info about logging:
 		 * https://docs.geode-sdk.org/tutorials/logging
 		*/
-		log::debug("Hello from my MenuLayer::init hook! This layer has {} children.", this->getChildrenCount());
+	    log::debug("Hello from my MenuLayer::init hook! This layer has {} children.", this->getChildrenCount());
+	
 
 		/**
 		 * See this page for more info about buttons
