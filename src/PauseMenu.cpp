@@ -9,26 +9,38 @@ bool g_showGhost = false;
 static PlayerObject* g_ghostPlayer = nullptr; 
 
 // ==========================================
-// 1. THE UI CONTROL
+// 1. THE UI CONTROL (Absolute Position Canvas)
 // ==========================================
 class $modify(MyPauseLayer, PauseLayer) {
-    void customSetup() {
-        PauseLayer::customSetup();
+    // FIXED: Added 'bool unfocused' to match Geode's Android function signature
+    bool init(bool unfocused) {
+        if (!PauseLayer::init(unfocused)) return false;
+
         auto winSize = CCDirector::sharedDirector()->getWinSize();
 
+        // Screen-wide canvas to avoid layout collapses
         auto menu = CCMenu::create();
-        menu->setPosition({60.0f, winSize.height - 35.0f});
+        menu->setPosition({0.0f, 0.0f});
         menu->setID("ghost-guide-menu"_spr);
 
         auto label = CCLabelBMFont::create(g_showGhost ? "Ghost: ON" : "Ghost: OFF", "bigFont.fnt");
-        label->setScale(0.4f);
+        label->setScale(0.5f); 
 
-        auto toggleBtn = CCMenuItemSpriteExtra::create(label, this, menu_selector(MyPauseLayer::onToggleGhost));
+        auto toggleBtn = CCMenuItemSpriteExtra::create(
+            label,
+            this,
+            menu_selector(MyPauseLayer::onToggleGhost)
+        );
+        
+        toggleBtn->setPosition({65.0f, winSize.height - 35.0f});
         toggleBtn->setID("ghost-guide-toggle"_spr);
 
         menu->addChild(toggleBtn);
         this->addChild(menu, 1000); 
+
+        return true;
     }
+
     void onToggleGhost(CCObject* sender) {
         g_showGhost = !g_showGhost;
         auto btn = static_cast<CCMenuItemSpriteExtra*>(sender);
@@ -44,7 +56,7 @@ class $modify(MyPauseLayer, PauseLayer) {
 };
 
 // ==========================================
-// 2. THE CORRECTED GHOST LOGIC
+// 2. THE DYNAMIC GHOST LOGIC
 // ==========================================
 class $modify(MyPlayLayer, PlayLayer) {
     
@@ -55,37 +67,40 @@ class $modify(MyPlayLayer, PlayLayer) {
 
     bool init(GJGameLevel* level, bool useReplay, bool dontRunActions) {
         if (!PlayLayer::init(level, useReplay, dontRunActions)) return false;
-        
         g_ghostPlayer = nullptr; 
-
-        if (g_showGhost) {
-            // FIX: Passing 'this' as both the GJBaseGameLayer and CCLayer parameters to resolve type casting
-            g_ghostPlayer = PlayerObject::create(1, 1, this, this, false);
-            if (g_ghostPlayer) {
-                g_ghostPlayer->setOpacity(128); 
-                this->addChild(g_ghostPlayer, 999);
-            }
-        }
         return true;
     }
 
     virtual void resetLevel() {
         PlayLayer::resetLevel(); 
         
-        if (g_showGhost && g_ghostPlayer) {
-            g_ghostPlayer->setPosition(this->m_player1->getPosition());
+        if (g_showGhost) {
+            if (!g_ghostPlayer) {
+                g_ghostPlayer = PlayerObject::create(1, 1, this, this, false);
+                if (g_ghostPlayer) {
+                    g_ghostPlayer->setOpacity(128); // Translucent ghost 👻
+                    this->addChild(g_ghostPlayer, 999);
+                }
+            }
+            
+            if (g_ghostPlayer) {
+                g_ghostPlayer->setPosition(this->m_player1->getPosition());
+                g_ghostPlayer->setVisible(true);
+            }
+        } else {
+            if (g_ghostPlayer) {
+                g_ghostPlayer->setVisible(false);
+            }
         }
     }
 
     virtual void update(float dt) {
         PlayLayer::update(dt); 
 
-        // FIX: Checking m_isDead via the player1 object context rather than the parent layer
         if (g_showGhost && g_ghostPlayer && this->m_player1 && !this->m_player1->m_isDead) {
             float currentX = this->m_player1->getPositionX();
             float currentY = this->m_player1->getPositionY();
             
-            // Render a clear visual lead offset ahead of the player position
             g_ghostPlayer->setPosition({currentX + 100.0f, currentY}); 
             g_ghostPlayer->setRotation(0); 
         }
