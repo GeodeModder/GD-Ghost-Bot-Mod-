@@ -8,7 +8,7 @@
     },
     "id": "geodemodder.bot_ghost",
     "name": "Bot Ghost",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "developer": "GeodeModder",
     "description": "A ghost bot mod",
     "dependencies": {
