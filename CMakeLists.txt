@@ -1,5 +1,4 @@
-cmake_minimum_required(VERSION 3.25) # 1. Bumped for Geode v5 compatibility
-
+cmake_minimum_required(VERSION 3.25)
 project(GhostGuide VERSION 1.1.2)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -15,18 +14,26 @@ else()
 endif()
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-# 2. Automatically locate the modern Geode SDK installation
+# ==========================================
+# FIX: Force CMake to find Geode in CI Environments
+# ==========================================
+if(DEFINED ENV{GEODE_SDK})
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{GEODE_SDK}")
+else()
+    # Default directory where Geode CLI installs the SDK on Linux / GitHub runners
+    list(APPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.geode/sdk")
+endif()
+
 find_package(Geode REQUIRED)
 
-# Add all source files inside src (recursively) - Keeping your clean layout!
+# Add all source files inside src (recursively)
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 
-# 3. Modern Geode Mod Target (Replaces add_library)
+# Modern Geode Mod Target
 add_geode_mod(
     joshi1549m.ghost_guide
     VERSION 1.1.2
     SOURCES ${SOURCES}
 )
 
-# 4. Finalize build engine context targeting Geode 5.7.1 explicitly
 setup_geode_mod(joshi1549m.ghost_guide VERSION 1.1.2 GEODE 5.7.1)
