@@ -44,9 +44,8 @@ class $modify(GhostBotLayer, PlayLayer) {
     // Dedicated safe spawner with explicit visibility fixes
     void spawnGhostBot() {
         if (!m_fields->m_ghostBot) {
-            // Modern 2.2081 factory initialization format
-            // 3rd arg: GJBaseGameLayer* (this), 4th arg: cocos2d::CCLayer* (this->m_objectLayer)
-            auto ghost = PlayerObject::create(1, 2, this, this->m_objectLayer);
+            // FIXED: Added the 5th argument 'true' for the playLayer parameter
+            auto ghost = PlayerObject::create(1, 2, this, this->m_objectLayer, true);
             if (ghost) {
                 m_fields->m_ghostBot = ghost;
                 
