@@ -1,7 +1,7 @@
 {
-    "geode": "5.0.0",
+    "geode": "5.7.1",
     "id": "joshi1549m.ghost_guide",
-    "version": "1.0.8",
+    "version": "1.1.2",
     "name": "Ghost Guide",
     "developer": "JOSHI1549M",
     "description": "A visual pacing guide helper that acts as a holographic pace car for practice runs.",
@@ -11,6 +11,12 @@
         "mac": "2.2081",
         "ios": "2.2081"
     },
-    "dependencies": {},
-    "settings": {}
+    "settings": {
+        "ghost-enabled": {
+            "name": "Enable Ghost Helper",
+            "type": "bool",
+            "default": true,
+            "description": "Toggles the macro-driven visual assistant."
+        }
+    }
 }
