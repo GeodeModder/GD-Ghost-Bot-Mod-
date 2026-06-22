@@ -78,8 +78,10 @@ class $modify(MyPlayLayer, PlayLayer) {
         
         if (g_showGhost) {
             if (!m_fields->m_ghostBot && this->m_objectLayer) {
-                // 2. PLAYER INPUTS & MANIPULATION: Direct 2.2081 constructor signature
-                m_fields->m_ghostBot = PlayerObject::create(1, 2, this->m_objectLayer, this, false);
+                // FIX: Swapped 'this' and 'this->m_objectLayer' to match the method signature perfectly!
+                // Also changed the last parameter to 'true' since we are running inside PlayLayer.
+                m_fields->m_ghostBot = PlayerObject::create(1, 2, this, this->m_objectLayer, true);
+                
                 if (m_fields->m_ghostBot) {
                     m_fields->m_ghostBot->setOpacity(128); // Make our pace car semi-translucent 👻
                     this->m_objectLayer->addChild(m_fields->m_ghostBot, 999);
@@ -96,7 +98,6 @@ class $modify(MyPlayLayer, PlayLayer) {
             }
         }
     }
-
     void update(float dt) {
         PlayLayer::update(dt); 
 
