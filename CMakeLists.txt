@@ -14,15 +14,15 @@ else()
 endif()
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-# ==========================================
-# FIX: Force CMake to find Geode in CI Environments
-# ==========================================
-if(DEFINED ENV{GEODE_SDK})
-    list(APPEND CMAKE_PREFIX_PATH "$ENV{GEODE_SDK}")
-else()
-    # Default directory where Geode CLI installs the SDK on Linux / GitHub runners
-    list(APPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.geode/sdk")
-endif()
+# =================================================================
+# FIX: Comprehensive search grid for Geode SDK on CI environments
+# =================================================================
+list(APPEND CMAKE_PREFIX_PATH 
+    "$ENV{GEODE_SDK}"
+    "$ENV{HOME}/.local/share/Geode/sdk"
+    "$ENV{HOME}/.geode/sdk"
+    "$ENV{HOME}/Documents/Geode"
+)
 
 find_package(Geode REQUIRED)
 
