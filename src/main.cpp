@@ -25,13 +25,15 @@ static inline IconType g_lastGhostType = IconType::Cube;
 // Tuned for your POCO X7 Pro's 120Hz display
 constexpr size_t OFFSET_FRAMES = 80; 
 
-// --- Persistence Helpers (Added) ---
+
+    Mod::get()->setSavedValue("ghost_tape", data);
+}
+
+// --- Persistence Logic ---
 void saveGhostData() {
-    matjson::Value data;
-    data.setArray(); // Sets the value as an array
+    matjson::Value data = matjson::Array();
     for (const auto& frame : g_ghostTape) {
-        matjson::Value obj;
-        obj.setObject(); // Sets the value as an object
+        matjson::Value obj = matjson::Object();
         obj["x"] = frame.position.x;
         obj["y"] = frame.position.y;
         obj["rot"] = frame.rotation;
@@ -46,12 +48,13 @@ void loadGhostData() {
     auto data = Mod::get()->getSavedValue<matjson::Value>("ghost_tape");
     if (data.isArray()) {
         g_ghostTape.clear();
-        for (auto& item : data.asArray()) {
+        // We use .unwrap() on the array and the individual values to get the raw data
+        for (auto& item : data.asArray().unwrap()) {
             g_ghostTape.push_back({
-                { (float)item["x"].asDouble(), (float)item["y"].asDouble() },
-                (float)item["rot"].asDouble(),
-                (IconType)item["type"].asInt(),
-                item["id"].asInt()
+                { (float)item["x"].asDouble().unwrap(), (float)item["y"].asDouble().unwrap() },
+                (float)item["rot"].asDouble().unwrap(),
+                (IconType)item["type"].asInt().unwrap(),
+                item["id"].asInt().unwrap()
             });
         }
     }
