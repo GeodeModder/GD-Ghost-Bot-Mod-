@@ -23,33 +23,31 @@ static inline IconType g_lastGhostType = IconType::Cube;
 
 constexpr size_t OFFSET_FRAMES = 80;
 
-// --- 2. HELPERS ---
+// --- 2. HELPER FUNCTIONS ---
 void saveGhostData() {
-    // Explicitly using Array() to ensure push_back works
-    matjson::Value data = matjson::Array(); 
-    
+    std::vector<matjson::Value> arr;
     for (const auto& frame : g_ghostTape) {
-        matjson::Value obj = matjson::Object();
-        obj["x"] = frame.position.x;
-        obj["y"] = frame.position.y;
-        obj["rot"] = frame.rotation;
-        obj["type"] = (int)frame.iconType;
-        obj["id"] = frame.iconID;
-        data.push_back(obj);
+        arr.push_back(matjson::makeObject({
+            {"x", frame.position.x},
+            {"y", frame.position.y},
+            {"rot", frame.rotation},
+            {"type", (int)frame.iconType},
+            {"id", frame.iconID}
+        }));
     }
-    Mod::get()->setSavedValue("ghost_tape", data);
+    Mod::get()->setSavedValue("ghost_tape", matjson::Value(arr));
 }
 
 void loadGhostData() {
     auto data = Mod::get()->getSavedValue<matjson::Value>("ghost_tape");
     if (data.isArray()) {
         g_ghostTape.clear();
-        for (auto& item : data.asArray().unwrap()) {
+        for (auto& item : data.asArray()) {
             g_ghostTape.push_back({
-                {(float)item["x"].asDouble().unwrap(), (float)item["y"].asDouble().unwrap()},
-                (float)item["rot"].asDouble().unwrap(),
-                (IconType)item["type"].asInt().unwrap(),
-                (int)item["id"].asInt().unwrap()
+                {(float)item["x"].asDouble(), (float)item["y"].asDouble()},
+                (float)item["rot"].asDouble(),
+                (IconType)item["type"].asInt(),
+                (int)item["id"].asInt()
             });
         }
     }
@@ -116,7 +114,6 @@ class $modify(GhostPlayLayer, PlayLayer) {
         return true;
     }
 
-    // Switched to onExit, it's safer for lifecycle cleanup
     void onExit() {
         saveGhostData();
         PlayLayer::onExit();
@@ -137,6 +134,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
         if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) spawnGhostBot(this);
         if (!g_mirrorGhost) return;
 
+        // Recording Logic
         if (this->m_isPracticeMode && this->m_player1 && !this->m_player1->m_isDead) {
             IconType currentType = getCurrentIconType(this->m_player1);
             g_ghostTape.push_back({
@@ -146,6 +144,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
                 getIconIdForType(currentType)
             });
         }
+        // Playback Logic
         else if (!this->m_isPracticeMode && !g_ghostTape.empty()) {
             size_t ghostTargetFrame = g_liveFrameCounter + OFFSET_FRAMES;
             if (ghostTargetFrame < g_ghostTape.size()) {
