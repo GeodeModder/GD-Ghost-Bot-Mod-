@@ -6,6 +6,7 @@
 
 using namespace geode::prelude;
 
+// --- Advanced Spatial Data Struct ---
 struct GhostFrame {
     cocos2d::CCPoint position;
     float rotation;
@@ -13,7 +14,7 @@ struct GhostFrame {
     int iconID;
 };
 
-// --- Globals ---
+// --- Global Memory Tape Reels ---
 static inline std::vector<GhostFrame> g_ghostTape;
 static inline std::vector<size_t> g_checkpointTapeMarks;
 static inline size_t g_liveFrameCounter = 0;
@@ -21,7 +22,8 @@ static inline SimplePlayer* g_mirrorGhost = nullptr;
 static inline GJGameLevel* g_recordedLevel = nullptr;
 static inline IconType g_lastGhostType = IconType::Cube;
 
-constexpr size_t OFFSET_FRAMES = 80;
+// Tuned for your POCO X7 Pro's 120Hz display
+constexpr size_t OFFSET_FRAMES = 80; 
 
 // --- Persistence ---
 void saveGhostData() {
@@ -82,7 +84,9 @@ int getIconIdForType(IconType type) {
 
 void spawnGhostBot(PlayLayer* playLayer) {
     if (g_mirrorGhost || !playLayer->m_objectLayer) return;
-    auto ghost = SimplePlayer::create(GameManager::sharedState()->getPlayerFrame());
+    auto gm = GameManager::sharedState();
+    int defaultCubeID = gm ? gm->getPlayerFrame() : 1;
+    auto ghost = SimplePlayer::create(defaultCubeID); 
     if (ghost) {
         ghost->setOpacity(130);
         ghost->setColor(cocos2d::ccColor3B{0, 255, 255});
@@ -92,59 +96,74 @@ void spawnGhostBot(PlayLayer* playLayer) {
     }
 }
 
-// --- Hooks ---
+// --- Hook Implementations ---
 class $modify(GhostPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCheat) {
         if (!PlayLayer::init(level, useReplay, dontCheat)) return false;
         g_liveFrameCounter = 0;
         g_mirrorGhost = nullptr;
+        
         if (g_recordedLevel != level) {
-            loadGhostData(); // Load on start
+            loadGhostData(); // Load the tape when level starts
             g_recordedLevel = level;
         }
-        if (Mod::get()->getSettingValue<bool>("ghost-enabled")) spawnGhostBot(this);
+
+        if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
+            spawnGhostBot(this);
+        }
         return true;
+    }
+
+    void onQuit() {
+        saveGhostData(); // Save the tape when you exit
+        PlayLayer::onQuit();
     }
 
     void resetLevel() {
         PlayLayer::resetLevel();
         g_liveFrameCounter = 0;
-        g_lastGhostType = IconType::Cube;
+        g_lastGhostType = IconType::Cube; 
         if (g_mirrorGhost) {
-            g_mirrorGhost->updatePlayerFrame(GameManager::sharedState()->getPlayerFrame(), IconType::Cube);
+            g_mirrorGhost->setVisible(true);
+            auto gm = GameManager::sharedState();
+            int cubeID = gm ? gm->getPlayerFrame() : 1;
+            g_mirrorGhost->updatePlayerFrame(cubeID, IconType::Cube);
             if (!g_ghostTape.empty()) {
                 g_mirrorGhost->setPosition(g_ghostTape[0].position);
                 g_mirrorGhost->setRotation(g_ghostTape[0].rotation);
             }
         }
     }
-
-    void onQuit() {
-        saveGhostData(); // Save on exit
-        PlayLayer::onQuit();
-    }
-
+    
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
         if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) spawnGhostBot(this);
         if (!g_mirrorGhost) return;
 
         if (this->m_isPracticeMode && this->m_player1) {
-            g_ghostTape.push_back({this->m_player1->getPosition(), this->m_player1->getRotation(), getCurrentIconType(this->m_player1), getIconIdForType(getCurrentIconType(this->m_player1))});
+            g_ghostTape.push_back({
+                this->m_player1->getPosition(),
+                this->m_player1->getRotation(),
+                getCurrentIconType(this->m_player1),
+                getIconIdForType(getCurrentIconType(this->m_player1))
+            });
         }
         else if (!this->m_isPracticeMode && !g_ghostTape.empty()) {
-            size_t target = g_liveFrameCounter + OFFSET_FRAMES;
-            if (target < g_ghostTape.size()) {
+            size_t ghostTargetFrame = g_liveFrameCounter + OFFSET_FRAMES;
+            if (ghostTargetFrame < g_ghostTape.size()) {
                 g_mirrorGhost->setVisible(true);
-                g_mirrorGhost->setPosition(g_ghostTape[target].position);
-                g_mirrorGhost->setRotation(g_ghostTape[target].rotation);
-                if (g_ghostTape[target].iconType != g_lastGhostType) {
-                    g_mirrorGhost->updatePlayerFrame(g_ghostTape[target].iconID, g_ghostTape[target].iconType);
-                    if (g_ghostTape[target].iconType == IconType::Robot) g_mirrorGhost->createRobotSprite(g_ghostTape[target].iconID);
-                    if (g_ghostTape[target].iconType == IconType::Spider) g_mirrorGhost->createSpiderSprite(g_ghostTape[target].iconID);
-                    g_lastGhostType = g_ghostTape[target].iconType;
+                GhostFrame targetData = g_ghostTape[ghostTargetFrame];
+                g_mirrorGhost->setPosition(targetData.position);
+                g_mirrorGhost->setRotation(targetData.rotation);
+                if (targetData.iconType != g_lastGhostType) {
+                    g_mirrorGhost->updatePlayerFrame(targetData.iconID, targetData.iconType);
+                    if (targetData.iconType == IconType::Robot) g_mirrorGhost->createRobotSprite(targetData.iconID);
+                    if (targetData.iconType == IconType::Spider) g_mirrorGhost->createSpiderSprite(targetData.iconID);
+                    g_lastGhostType = targetData.iconType;
                 }
-            } else g_mirrorGhost->setVisible(false);
+            } else {
+                g_mirrorGhost->setVisible(false);
+            }
             g_liveFrameCounter++;
         }
     }
@@ -157,8 +176,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
     void loadFromCheckpoint(CheckpointObject* checkpoint) {
         PlayLayer::loadFromCheckpoint(checkpoint);
         if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
-            size_t rb = g_checkpointTapeMarks.back();
-            if (rb <= g_ghostTape.size()) g_ghostTape.resize(rb);
+            size_t rollbackFrame = g_checkpointTapeMarks.back();
+            if (rollbackFrame <= g_ghostTape.size()) g_ghostTape.resize(rollbackFrame);
         }
     }
 
