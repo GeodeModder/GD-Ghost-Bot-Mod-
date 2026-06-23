@@ -27,8 +27,7 @@ class $modify(GhostBotLayer, PlayLayer) {
     }
 
     void resetLevel() {
-        // CRITICAL BUGFIX: Vaporize the old entity completely on reset 
-        // This stops the engine from creating duplicate zombie clones on the screen!
+        // Tearing down old ghost node on reset to completely kill the duplicate/dual split glitch
         if (m_fields->m_ghostBot) {
             m_fields->m_ghostBot->removeFromParent();
             m_fields->m_ghostBot = nullptr;
@@ -53,8 +52,8 @@ class $modify(GhostBotLayer, PlayLayer) {
 
     void spawnGhostBot() {
         if (!m_fields->m_ghostBot && this->m_objectLayer) {
-            // FIX: Using the exact 4-argument factory layout parameter from your spec sheet
-            auto ghost = PlayerObject::create(1, 2, this, this->m_objectLayer);
+            // FIXED: Added the mandatory 5th 'true' argument required by PlayerObject.hpp
+            auto ghost = PlayerObject::create(1, 2, this, this->m_objectLayer, true);
             if (ghost) {
                 m_fields->m_ghostBot = ghost;
                 
@@ -67,8 +66,7 @@ class $modify(GhostBotLayer, PlayLayer) {
                 // Add directly to the active canvas root parent layer container
                 this->addChild(ghost, 999); 
 
-                // FIX: Force immediate state sync right at birth. 
-                // This ensures it transforms into a Ship/Wave/Ball instantly if a level starts inside a portal!
+                // Force immediate state sync right at birth to support custom gamemode starts
                 syncGhostGamemode(ghost, this->m_player1);
             }
         }
@@ -89,7 +87,7 @@ class $modify(GhostBotLayer, PlayLayer) {
         ghost->setScale(player->getScale());
     }
 
-    // FIX: Using postUpdate to force the spatial override vectors AFTER the physics loop finishes computing
+    // Using postUpdate to force the spatial override vectors AFTER the physics loop finishes computing
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
 
