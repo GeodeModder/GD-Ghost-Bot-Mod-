@@ -27,7 +27,7 @@ class $modify(GhostBotLayer, PlayLayer) {
     }
 
     void resetLevel() {
-        // Tearing down old ghost node on reset to completely kill the duplicate/dual split glitch
+        // Vaporize the old entity completely on reset to kill duplicate clone glitches
         if (m_fields->m_ghostBot) {
             m_fields->m_ghostBot->removeFromParent();
             m_fields->m_ghostBot = nullptr;
@@ -52,10 +52,14 @@ class $modify(GhostBotLayer, PlayLayer) {
 
     void spawnGhostBot() {
         if (!m_fields->m_ghostBot && this->m_objectLayer) {
-            // FIXED: Added the mandatory 5th 'true' argument required by PlayerObject.hpp
+            // Using the verified 5-argument factory signature required by your NDK toolchain
             auto ghost = PlayerObject::create(1, 2, this, this->m_objectLayer, true);
             if (ghost) {
                 m_fields->m_ghostBot = ghost;
+                
+                // CRITICAL BUGFIX: Stop Cocos2d from automatically updating this node!
+                // This kills the 5x runaway speed loop and stops it from reading accidental screen input.
+                ghost->unscheduleUpdate();
                 
                 // Visual setup
                 ghost->setScale(this->m_player1->getScale()); 
@@ -106,13 +110,14 @@ class $modify(GhostBotLayer, PlayLayer) {
                 // Keep gamemode modifications matched frame-by-frame
                 syncGhostGamemode(ghost, player);
 
-                // Let internal animation vectors tick smoothly
+                // Manually tick its visual internal animation matrices strictly under our timeline control
                 ghost->update(dt);
 
                 // Absolute translation execution pass to lock the scout exactly 60 units in front
                 float currentX = player->getPositionX();
                 float currentY = player->getPositionY();
                 
+                // It will now perfectly mimic your Y position, making its trail look like a beautiful, clean guide line!
                 ghost->setPosition({currentX + 60.0f, currentY}); 
                 ghost->setRotation(player->getRotation()); 
             }
