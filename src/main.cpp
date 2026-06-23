@@ -42,12 +42,14 @@ void loadGhostData() {
     auto data = Mod::get()->getSavedValue<matjson::Value>("ghost_tape");
     if (data.isArray()) {
         g_ghostTape.clear();
-        for (auto& item : data.asArray()) {
+        // .unwrap() is the key here to get the vector out of the Result
+        for (auto& item : data.asArray().unwrap()) {
             g_ghostTape.push_back({
-                {(float)item["x"].asDouble(), (float)item["y"].asDouble()},
-                (float)item["rot"].asDouble(),
-                (IconType)item["type"].asInt(),
-                (int)item["id"].asInt()
+                // .unwrap() extracts the actual value from the Result
+                {(float)item["x"].asDouble().unwrap(), (float)item["y"].asDouble().unwrap()},
+                (float)item["rot"].asDouble().unwrap(),
+                (IconType)item["type"].asInt().unwrap(),
+                (int)item["id"].asInt().unwrap()
             });
         }
     }
