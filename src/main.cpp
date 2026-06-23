@@ -139,8 +139,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
         if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) spawnGhostBot(this);
         if (!g_mirrorGhost) return;
 
-        // Recording: Only record if alive. Death frames are ignored.
-        if (this->m_isPracticeMode && this->m_player1 && !this->m_isDead) {
+        // Recording: We check m_player1->m_isDead to ignore death animation frames
+        if (this->m_isPracticeMode && this->m_player1 && !this->m_player1->m_isDead) {
             IconType currentType = getCurrentIconType(this->m_player1);
             g_ghostTape.push_back({
                 this->m_player1->getPosition(),
@@ -182,7 +182,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
 
     void loadFromCheckpoint(CheckpointObject* checkpoint) {
         PlayLayer::loadFromCheckpoint(checkpoint);
-        // Clean out the "death run" by reverting to the last checkpoint mark
+        // Clean out the "failed run" by reverting to the last known checkpoint mark
         if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
             size_t lastMark = g_checkpointTapeMarks.back();
             if (g_ghostTape.size() > lastMark) {
