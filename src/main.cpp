@@ -4,17 +4,31 @@
 
 using namespace geode::prelude;
 
-// Global tracking pointer to ensure ONLY ONE ghost exists and can be frozen
+// Global tracking pointer for our ghost bot
 static inline PlayerObject* g_ghostBot = nullptr;
 
 class $modify(GhostPlayerObject, PlayerObject) {
+    // 1. FREEZE HORIZONTAL MOVEMENT: Stops the engine from giving it auto-speed
+    void playerMoveX(float amt) {
+        if (this == g_ghostBot) return;
+        PlayerObject::playerMoveX(amt);
+    }
+
+    // 2. PARALYZE NATIVE PHYSICS: Stops it from executing independent gravity/velocity
     void update(float dt) {
-        // THE ULTIMATE OVERRIDE: If the engine is trying to update our ghost,
-        // stop it dead in its tracks. Do not run native physics or movement.
-        if (this == g_ghostBot) {
-            return; 
-        }
+        if (this == g_ghostBot) return;
         PlayerObject::update(dt);
+    }
+
+    // 3. BLOCK CLICKS: Stops it from jumping when you tap the screen
+    void pushButton(PlayerButton btn) {
+        if (this == g_ghostBot) return;
+        PlayerObject::pushButton(btn);
+    }
+
+    void releaseButton(PlayerButton btn) {
+        if (this == g_ghostBot) return;
+        PlayerObject::releaseButton(btn);
     }
 };
 
@@ -35,7 +49,6 @@ class $modify(GhostBotLayer, PlayLayer) {
     }
 
     void resetLevel() {
-        // Obliterate the ghost object on death/reset to fix the duplicate bugs
         if (g_ghostBot) {
             g_ghostBot->removeFromParent();
             g_ghostBot = nullptr;
@@ -57,15 +70,15 @@ class $modify(GhostBotLayer, PlayLayer) {
     }
 
     void spawnGhostBot() {
-        // Safeguard: If a ghost already exists, do NOT spawn another one
         if (!g_ghostBot && this->m_objectLayer) {
-            auto ghost = PlayerObject::create(1, 2, nullptr, this->m_objectLayer, false);
+            // FIXED: Passing nullptr for the 4th argument isolates it from the engine's automated physics loops
+            auto ghost = PlayerObject::create(1, 2, nullptr, nullptr, false);
             if (ghost) {
                 g_ghostBot = ghost;
                 
                 ghost->unscheduleUpdate();
                 
-                // Nuclear trail deletion
+                // Hide all native trail arrays completely
                 if (ghost->m_regularTrail) ghost->m_regularTrail->setVisible(false);
                 if (ghost->m_shipStreak) ghost->m_shipStreak->setVisible(false);
                 if (ghost->m_waveTrail) ghost->m_waveTrail->setVisible(false);
@@ -75,6 +88,7 @@ class $modify(GhostBotLayer, PlayLayer) {
                 ghost->setColor({0, 255, 255}); 
                 ghost->setVisible(true);
 
+                // Manually add it to the scene layer so it renders visually
                 this->addChild(ghost, 999); 
                 syncGhostGamemode(ghost, this->m_player1);
             }
@@ -114,11 +128,11 @@ class $modify(GhostBotLayer, PlayLayer) {
                 if (ghost->m_shipStreak) ghost->m_shipStreak->setVisible(false);
                 if (ghost->m_waveTrail) ghost->m_waveTrail->setVisible(false);
 
-                // With native physics completely dead, our manual coordinate syncing wins!
                 float currentX = player->getPositionX();
                 float currentY = player->getPositionY();
                 
-                // If you want it exactly on top of you, change "+ 60.0f" to "+ 0.0f"
+                // POSITION CONTROL:
+                // Changing "+ 60.0f" to "+ 0.0f" makes it overlap exactly on top of you like a standard replay ghost.
                 ghost->setPosition({currentX + 60.0f, currentY}); 
                 ghost->setRotation(player->getRotation()); 
             }
