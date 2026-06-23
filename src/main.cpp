@@ -46,16 +46,17 @@ class $modify(GhostBotLayer, PlayLayer) {
 
     void spawnGhostBot() {
         if (!m_fields->m_ghostBot && this->m_objectLayer) {
+            // nullptr isolation stops the engine from tracking inputs/updates automatically
             auto ghost = PlayerObject::create(1, 2, nullptr, this->m_objectLayer, true);
             if (ghost) {
                 m_fields->m_ghostBot = ghost;
                 
                 ghost->unscheduleUpdate();
                 
-                // FORCE TRAIL OFF: This kills the invisible jumping trail completely
-                if (ghost->m_trail) {
-                    ghost->m_trail->setVisible(false);
-                }
+                // FIXED: Using verified Geode binding field names to kill the trails
+                if (ghost->m_regularTrail) ghost->m_regularTrail->setVisible(false);
+                if (ghost->m_shipStreak) ghost->m_shipStreak->setVisible(false);
+                if (ghost->m_waveTrail) ghost->m_waveTrail->setVisible(false);
                 
                 ghost->setScale(this->m_player1->getScale()); 
                 ghost->setOpacity(130);
@@ -97,19 +98,16 @@ class $modify(GhostBotLayer, PlayLayer) {
                 ghost->setVisible(true);
                 syncGhostGamemode(ghost, player);
 
-                // Re-verify trail is dead every frame
-                if (ghost->m_trail) {
-                    ghost->m_trail->setVisible(false);
-                }
+                // Keep trails hidden every single frame pass
+                if (ghost->m_regularTrail) ghost->m_regularTrail->setVisible(false);
+                if (ghost->m_shipStreak) ghost->m_shipStreak->setVisible(false);
+                if (ghost->m_waveTrail) ghost->m_waveTrail->setVisible(false);
 
                 float currentX = player->getPositionX();
                 float currentY = player->getPositionY();
                 
                 ghost->setPosition({currentX + 60.0f, currentY}); 
                 ghost->setRotation(player->getRotation()); 
-                
-                // COMMENTED OUT: Paralyzes internal engine physics entirely
-                // ghost->update(dt);
             }
         } else {
             if (m_fields->m_ghostBot) {
