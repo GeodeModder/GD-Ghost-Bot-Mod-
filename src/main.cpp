@@ -8,16 +8,11 @@ class $modify(GhostBotLayer, PlayLayer) {
         PlayerObject* m_ghostBot = nullptr;
     };
 
-    // 2.2081 Correct PlayLayer Hook Signature
     bool init(GJGameLevel* level, bool useReplay, bool dontCheat) {
         if (!PlayLayer::init(level, useReplay, dontCheat)) return false;
 
         m_fields->m_ghostBot = nullptr;
-
-        // Safely pull the toggle state out of the 5.7.1 setting cache
-        bool isGhostEnabled = Mod::get()->getSettingValue<bool>("ghost-enabled");
-
-        if (isGhostEnabled) {
+        if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
             spawnGhostBot();
         }
         return true;
@@ -30,9 +25,7 @@ class $modify(GhostBotLayer, PlayLayer) {
 
     void resetLevel() {
         PlayLayer::resetLevel();
-        
-        bool isGhostEnabled = Mod::get()->getSettingValue<bool>("ghost-enabled");
-        if (isGhostEnabled) {
+        if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
             spawnGhostBot();
             if (m_fields->m_ghostBot && this->m_player1) {
                 m_fields->m_ghostBot->setPosition(this->m_player1->getPosition());
@@ -41,57 +34,51 @@ class $modify(GhostBotLayer, PlayLayer) {
         }
     }
 
-    // Dedicated safe spawner with explicit visibility fixes
+    // Immortal Hook: The ghost ignores death
+    void destroyPlayer(PlayerObject* p1, GameObject* p2) {
+        if (p1 == m_fields->m_ghostBot) return; 
+        PlayLayer::destroyPlayer(p1, p2);
+    }
+
     void spawnGhostBot() {
         if (!m_fields->m_ghostBot) {
-            // FIXED: Added the 5th argument 'true' for the playLayer parameter
-            auto ghost = PlayerObject::create(1, 2, this, this->m_objectLayer, true);
+            // FIX 1: Changed 5th argument to 'false' so it isn't shackled by Player 2 dual physics
+            auto ghost = PlayerObject::create(1, 2, this, this->m_objectLayer, false);
             if (ghost) {
                 m_fields->m_ghostBot = ghost;
-                
-                // CRITICAL VISIBILITY AND RENDER TREE FIXES
                 ghost->setScale(this->m_player1->getScale()); 
-                ghost->setOpacity(130);          // Makes it look translucent/ghostly 👻
-                ghost->setColor({0, 255, 255});  // Distinct cyan hue helper look
+                ghost->setOpacity(130);
+                ghost->setColor({0, 255, 255});
                 ghost->setVisible(true);
-
-                // Place directly on the main running canvas layer
+                ghost->setEnableCollisions(true); 
                 this->addChild(ghost, 999); 
             }
         }
     }
 
-    // Safety Engine Hook: Stops menu rendering crashes completely
     void update(float dt) {
         PlayLayer::update(dt);
+        if (this->m_isPaused || !Mod::get()->getSettingValue<bool>("ghost-enabled")) return;
 
-        // Crash Prevention Guard Rails
-        if (this->m_isPaused) return; // Instantly suspends execution thread on pause
+        if (!m_fields->m_ghostBot) spawnGhostBot();
 
-        bool isGhostEnabled = Mod::get()->getSettingValue<bool>("ghost-enabled");
-
-        if (isGhostEnabled) {
-            if (!m_fields->m_ghostBot) {
-                spawnGhostBot();
+        if (m_fields->m_ghostBot && this->m_player1) {
+            m_fields->m_ghostBot->setVisible(true);
+            
+            if (m_fields->m_ghostBot->m_isShip != this->m_player1->m_isShip) {
+                m_fields->m_ghostBot->toggleFlyMode(this->m_player1->m_isShip);
             }
 
-            if (m_fields->m_ghostBot && this->m_player1) {
-                m_fields->m_ghostBot->setVisible(true);
-                
-                // Track 60 units ahead of your actual position
-                float currentX = this->m_player1->getPositionX();
-                float currentY = this->m_player1->getPositionY();
-                
-                m_fields->m_ghostBot->setPosition({currentX + 60.0f, currentY}); 
-                m_fields->m_ghostBot->setRotation(this->m_player1->getRotation()); 
-                
-                // Keep the bot's internal visual animations ticking smoothly
-                m_fields->m_ghostBot->update(dt);
-            }
-        } else {
-            if (m_fields->m_ghostBot) {
-                m_fields->m_ghostBot->setVisible(false);
-            }
+            // FIX 2: Call update() BEFORE setting the position.
+            // This lets the engine do its internal math first, then we forcefully override it.
+            m_fields->m_ghostBot->update(dt);
+
+            // Now force the scout 60 units ahead cleanly
+            float currentX = this->m_player1->getPositionX();
+            float currentY = this->m_player1->getPositionY();
+            
+            m_fields->m_ghostBot->setPosition({currentX + 60.0f, currentY}); 
+            m_fields->m_ghostBot->setRotation(this->m_player1->getRotation()); 
         }
     }
 };
