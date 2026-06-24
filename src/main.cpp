@@ -1,191 +1,238 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
-#include <Geode/binding/SimplePlayer.hpp>
-#include <Geode/binding/GameManager.hpp>
+#include <fstream>
 #include <vector>
+#include <map>
 #include <string>
+#include <filesystem>
 
 using namespace geode::prelude;
 
-// --- DATA STRUCTURE ---
+// Structure to capture player state every frame
 struct GhostFrame {
     cocos2d::CCPoint position;
     float rotation;
-    bool isHolding;
-    int iconID;
-    int iconType;
+    bool isUpsideDown;
 };
 
-// --- MOD MODIFY LAYER ---
-class $modify(GhostPlayLayer, PlayLayer) {
+// Custom serialization for matjson (Geode v3 standard)
+template <>
+struct matjson::Serialize<GhostFrame> {
+    static GhostFrame from_json(matjson::Value const& value) {
+        return GhostFrame {
+            .position = cocos2d::CCPoint(
+                static_cast<float>(value["x"].as_double()),
+                static_cast<float>(value["y"].as_double())
+            ),
+            .rotation = static_cast<float>(value["r"].as_double()),
+            .isUpsideDown = value["u"].as_bool()
+        };
+    }
 
+    static matjson::Value to_json(GhostFrame const& value) {
+        matjson::Value obj;
+        obj["x"] = value.position.x;
+        obj["y"] = value.position.y;
+        obj["r"] = value.rotation;
+        obj["u"] = value.isUpsideDown;
+        return obj;
+    }
+};
+
+// Helper function to resolve file paths for each ghost track
+std::filesystem::path getGhostPath(int levelID, bool isCoinRun) {
+    auto dir = geode::Mod::get()->getSaveDir();
+    std::string filename = "ghost_" + std::to_string(levelID) + (isCoinRun ? "_coin.json" : "_normal.json");
+    return dir / filename;
+}
+
+// PlayLayer Hooking & Ghost Logic Management
+struct $modify(MyPlayLayer, PlayLayer) {
     struct Fields {
-        std::vector<GhostFrame> m_ghostTape;
-        size_t m_playbackIndex = 0;
-        bool m_isRecording = false;
-        bool m_hasDied = false;
-        bool m_isHoldingInput = false;
-        SimplePlayer* m_ghostPlayer = nullptr;
+        std::vector<GhostFrame> m_currentRecording;
+        std::vector<GhostFrame> m_normalGhostTape;
+        std::vector<GhostFrame> m_coinGhostTape;
+
+        cocos2d::CCSprite* m_normalGhostSprite = nullptr;
+        cocos2d::CCSprite* m_coinGhostSprite = nullptr;
+
+        // Tracks the frame index AND the coin pickup status at the time a checkpoint is dropped
+        std::map<CheckpointObject*, std::pair<size_t, bool>> m_practiceCheckpoints; 
+
+        bool m_collectedCoinThisRun = false;
+        int m_levelID = 0;
     };
 
-    // --- A. INITIALIZATION ---
-    bool init(GJGameLevel* level, bool useReplay, bool dontCheat) {
-        if (!PlayLayer::init(level, useReplay, dontCheat)) return false;
+    bool init(GJGameLevel* level, bool usePractice, bool isPlatformer) {
+        if (!PlayLayer::init(level, usePractice, isPlatformer)) return false;
 
-        m_fields->m_ghostTape.clear();
-        m_fields->m_playbackIndex = 0;
-        m_fields->m_hasDied = false;
-        
-        // Auto-load existing saved data for this specific level
-        this->loadGhostData(level->m_levelID);
-        
-        // Mode Decider: If data exists, play it back. If empty, record a new sequence.
-        if (!m_fields->m_ghostTape.empty()) {
-            m_fields->m_isRecording = false;
-            log::info("Ghost: Loaded {} frames. Mode: PLAYBACK", m_fields->m_ghostTape.size());
-        } else {
-            m_fields->m_isRecording = true;
-            log::info("Ghost: No saved run found. Mode: RECORDING");
+        m_fields->m_levelID = level->m_levelID;
+        m_fields->m_collectedCoinThisRun = false;
+
+        // 1. Attempt to load the Normal Ghost Track
+        auto normalPath = getGhostPath(m_fields->m_levelID, false);
+        if (std::filesystem::exists(normalPath)) {
+            try {
+                std::ifstream file(normalPath);
+                std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                auto parseResult = matjson::parse(str);
+                if (parseResult.is_ok()) {
+                    m_fields->m_normalGhostTape = parseResult.unwrap().as<std::vector<GhostFrame>>();
+                    
+                    // Instantiate Normal Ghost Visuals (Cyan)
+                    m_fields->m_normalGhostSprite = CCSprite::createWithSpriteFrameName("player_01_001.png");
+                    if (m_fields->m_normalGhostSprite) {
+                        m_fields->m_normalGhostSprite->setColor({0, 255, 255});
+                        m_fields->m_normalGhostSprite->setOpacity(120);
+                        m_fields->m_normalGhostSprite->setVisible(false);
+                        this->addChild(m_fields->m_normalGhostSprite, 100);
+                    }
+                }
+            } catch (...) {
+                log::error("Failed to parse normal ghost tape data.");
+            }
         }
 
-        if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
-            this->createGhostPlayer();
+        // 2. Attempt to load the Coin Ghost Track
+        auto coinPath = getGhostPath(m_fields->m_levelID, true);
+        if (std::filesystem::exists(coinPath)) {
+            try {
+                std::ifstream file(coinPath);
+                std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                auto parseResult = matjson::parse(str);
+                if (parseResult.is_ok()) {
+                    m_fields->m_coinGhostTape = parseResult.unwrap().as<std::vector<GhostFrame>>();
+                    
+                    // Instantiate Coin Ghost Visuals (Gold/Yellow)
+                    m_fields->m_coinGhostSprite = CCSprite::createWithSpriteFrameName("player_01_001.png");
+                    if (m_fields->m_coinGhostSprite) {
+                        m_fields->m_coinGhostSprite->setColor({255, 215, 0});
+                        m_fields->m_coinGhostSprite->setOpacity(150);
+                        m_fields->m_coinGhostSprite->setVisible(false);
+                        this->addChild(m_fields->m_coinGhostSprite, 100);
+                    }
+                }
+            } catch (...) {
+                log::error("Failed to parse coin ghost tape data.");
+            }
         }
 
         return true;
     }
 
-    // --- B. THE DEATH HOOK ---
-    void destroyPlayer(PlayerObject* p0, GameObject* p1) {
-        m_fields->m_hasDied = true;
-        PlayLayer::destroyPlayer(p0, p1);
-    }
+    void update(float dt) {
+        PlayLayer::update(dt);
 
-    // --- C. INPUT HOOK ---
-    void handleButton(bool down, int button, bool isPlayer1) {
-        if (isPlayer1) {
-            m_fields->m_isHoldingInput = down;
+        // Don't record or manipulate visuals if the layer isn't active or player is dead
+        if (!m_player1 || m_isDead) return;
+
+        // Use the current size of the recording vector as our sync clock frame index
+        size_t currentIndex = m_fields->m_currentRecording.size();
+
+        // Record the player's real-time kinematics
+        GhostFrame frame;
+        frame.position = m_player1->getPosition();
+        frame.rotation = m_player1->getRotation();
+        frame.isUpsideDown = m_player1->m_isUpsideDown;
+        m_fields->m_currentRecording.push_back(frame);
+
+        // Handle Normal Ghost Playback
+        if (m_fields->m_normalGhostSprite && currentIndex < m_fields->m_normalGhostTape.size()) {
+            auto const& ghostFrame = m_fields->m_normalGhostTape[currentIndex];
+            m_fields->m_normalGhostSprite->setPosition(ghostFrame.position);
+            m_fields->m_normalGhostSprite->setRotation(ghostFrame.rotation);
+            m_fields->m_normalGhostSprite->setScaleY(ghostFrame.isUpsideDown ? -1.0f : 1.0f);
+            m_fields->m_normalGhostSprite->setVisible(true);
+        } else if (m_fields->m_normalGhostSprite) {
+            m_fields->m_normalGhostSprite->setVisible(false);
         }
-        PlayLayer::handleButton(down, button, isPlayer1);
-    }
 
-    // --- D. GHOST SPAWNER ---
-    void createGhostPlayer() {
-        if (m_fields->m_ghostPlayer) return;
-        
-        auto gm = GameManager::sharedState();
-        m_fields->m_ghostPlayer = SimplePlayer::create(gm->getPlayerFrame());
-        
-        if (m_fields->m_ghostPlayer) {
-            m_fields->m_ghostPlayer->setOpacity(130);
-            m_fields->m_ghostPlayer->setColor(cocos2d::ccColor3B{0, 255, 255}); // Cyan ghost
-            m_fields->m_ghostPlayer->setVisible(false);
-            this->m_objectLayer->addChild(m_fields->m_ghostPlayer, 999);
-        }
-    }
-
-    // --- E. THE PER-FRAME ENGINE ---
-    void postUpdate(float dt) {
-        PlayLayer::postUpdate(dt);
-        if (!this->m_player1) return;
-
-        // 1. RECORDING SYSTEM
-        if (m_fields->m_isRecording && !m_fields->m_hasDied) {
-            GhostFrame frame;
-            frame.position = this->m_player1->getPosition();
-            frame.rotation = this->m_player1->getRotation();
-            frame.isHolding = m_fields->m_isHoldingInput;
-            frame.iconID = GameManager::sharedState()->getPlayerFrame();
-            frame.iconType = (int)IconType::Cube;
-            m_fields->m_ghostTape.push_back(frame);
-        }
-        // 2. PLAYBACK SYSTEM
-        else if (!m_fields->m_isRecording && !m_fields->m_ghostTape.empty()) {
-            if (m_fields->m_playbackIndex < m_fields->m_ghostTape.size()) {
-                auto& frame = m_fields->m_ghostTape[m_fields->m_playbackIndex];
-                
-                if (m_fields->m_ghostPlayer) {
-                    m_fields->m_ghostPlayer->setVisible(true);
-                    m_fields->m_ghostPlayer->setPosition(frame.position);
-                    m_fields->m_ghostPlayer->setRotation(frame.rotation);
-                    m_fields->m_ghostPlayer->setScale(this->m_player1->getScale());
-                }
-                m_fields->m_playbackIndex++;
-            } else {
-                if (m_fields->m_ghostPlayer) m_fields->m_ghostPlayer->setVisible(false);
-            }
+        // Handle Coin Ghost Playback
+        if (m_fields->m_coinGhostSprite && currentIndex < m_fields->m_coinGhostTape.size()) {
+            auto const& ghostFrame = m_fields->m_coinGhostTape[currentIndex];
+            m_fields->m_coinGhostSprite->setPosition(ghostFrame.position);
+            m_fields->m_coinGhostSprite->setRotation(ghostFrame.rotation);
+            m_fields->m_coinGhostSprite->setScaleY(ghostFrame.isUpsideDown ? -1.0f : 1.0f);
+            m_fields->m_coinGhostSprite->setVisible(true);
+        } else if (m_fields->m_coinGhostSprite) {
+            m_fields->m_coinGhostSprite->setVisible(false);
         }
     }
 
-    // --- F. LEVEL RESET HACK ---
     void resetLevel() {
         PlayLayer::resetLevel();
         
-        // Critical Logic Fix: Only dump the data if we ruined a run *while* actively recording.
-        // If we are observing a recorded run, do not wipe the tape!
-        if (m_fields->m_hasDied && m_fields->m_isRecording) {
-            log::info("Ghost: Wiping invalid tape recorded during a death run.");
-            m_fields->m_ghostTape.clear();
-        }
-        
-        m_fields->m_hasDied = false;
-        m_fields->m_playbackIndex = 0; // Back to frame 0
-        
-        if (m_fields->m_ghostPlayer) {
-            m_fields->m_ghostPlayer->setVisible(!m_fields->m_isRecording && !m_fields->m_ghostTape.empty());
-            m_fields->m_ghostPlayer->updatePlayerFrame(GameManager::sharedState()->getPlayerFrame(), IconType::Cube);
+        // Clean up data for fresh non-practice runs or runs with no active checkpoints
+        if (!m_isPracticeMode || m_fields->m_practiceCheckpoints.empty()) {
+            m_fields->m_currentRecording.clear();
+            m_fields->m_collectedCoinThisRun = false;
         }
     }
 
-    // --- G. DATA STORAGE: SAVE ---
-    void saveGhostData(int levelID) {
-        std::vector<matjson::Value> arr;
-        for (const auto& frame : m_fields->m_ghostTape) {
-            arr.push_back(matjson::makeObject({
-                {"x", frame.position.x},
-                {"y", frame.position.y},
-                {"rot", frame.rotation},
-                {"hold", frame.isHolding},
-                {"id", frame.iconID}
-            }));
-        }
-        Mod::get()->setSavedValue("ghost_tape_" + std::to_string(levelID), matjson::Value(arr));
-    }
-
-    // --- H. DATA STORAGE: LOAD ---
-    void loadGhostData(int levelID) {
-        auto data = Mod::get()->getSavedValue<matjson::Value>("ghost_tape_" + std::to_string(levelID));
-        m_fields->m_ghostTape.clear();
+    void createCheckpoint() {
+        PlayLayer::createCheckpoint();
         
-        if (data.isArray()) {
-            for (auto& item : data.asArray().unwrap()) {
-                GhostFrame frame;
-                // Explicit CCPoint instantiation to fully bypass modern syntax resolution bugs
-                frame.position = cocos2d::CCPoint(
-                    static_cast<float>(item["x"].asDouble().unwrap()), 
-                    static_cast<float>(item["y"].asDouble().unwrap())
-                );
-                frame.rotation = (float)item["rot"].asDouble().unwrap();
-                frame.isHolding = item["hold"].asBool().unwrap();
-                frame.iconID = (int)item["id"].asInt().unwrap();
-                frame.iconType = (int)IconType::Cube;
-                m_fields->m_ghostTape.push_back(frame);
+        if (m_checkpointArray && m_checkpointArray->count() > 0) {
+            auto checkpoint = static_cast<CheckpointObject*>(m_checkpointArray->lastObject());
+            if (checkpoint) {
+                size_t frameIndex = m_fields->m_currentRecording.size();
+                // Take a snapshot of the tape index and coin state at this point
+                m_fields->m_practiceCheckpoints[checkpoint] = { frameIndex, m_fields->m_collectedCoinThisRun };
             }
         }
     }
 
-    // --- I. CHECKPOINT COMPATIBILITY ---
-    void loadFromCheckpoint(CheckpointObject* checkpoint) {
-        PlayLayer::loadFromCheckpoint(checkpoint);
-        m_fields->m_hasDied = false;
+    void loadFromCheckpoint() {
+        PlayLayer::loadFromCheckpoint();
+        
+        if (m_checkpointArray && m_checkpointArray->count() > 0) {
+            auto checkpoint = static_cast<CheckpointObject*>(m_checkpointArray->lastObject());
+            if (checkpoint && m_fields->m_practiceCheckpoints.contains(checkpoint)) {
+                auto const& [frameIndex, coinFlag] = m_fields->m_practiceCheckpoints[checkpoint];
+                
+                // Splice out any corrupted frames recorded past this checkpoint
+                if (frameIndex <= m_fields->m_currentRecording.size()) {
+                    m_fields->m_currentRecording.resize(frameIndex);
+                }
+                // Revert coin state back to what it was when checkpoint was saved
+                m_fields->m_collectedCoinThisRun = coinFlag;
+            }
+        }
     }
 
-    // --- J. LIFECYCLE CLEANUP ---
-    void onExit() {
-        // Save recording to file on safe exits
-        if (m_fields->m_isRecording && !m_fields->m_hasDied) {
-            this->saveGhostData(this->m_level->m_levelID);
+    void removeCheckpoint() {
+        if (m_checkpointArray && m_checkpointArray->count() > 0) {
+            auto checkpoint = static_cast<CheckpointObject*>(m_checkpointArray->lastObject());
+            if (checkpoint) {
+                m_fields->m_practiceCheckpoints.erase(checkpoint);
+            }
         }
-        PlayLayer::onExit();
+        PlayLayer::removeCheckpoint();
+    }
+
+    void destroyObject(GameObject* obj) {
+        PlayLayer::destroyObject(obj);
+        
+        if (obj) {
+            int type = static_cast<int>(obj->m_objectType);
+            // 22 handles Normal Secret Coins, 37 handles Custom/User Coins
+            if (type == 22 || type == 37) {
+                m_fields->m_collectedCoinThisRun = true;
+            }
+        }
+    }
+
+    void levelComplete() {
+        PlayLayer::levelComplete();
+        
+        // Persist tape files locally upon a legitimate complete run
+        if (!m_fields->m_currentRecording.empty()) {
+            bool isCoinRun = m_fields->m_collectedCoinThisRun;
+            auto path = getGhostPath(m_fields->m_levelID, isCoinRun);
+            
+            matjson::Value json = m_fields->m_currentRecording;
+            std::ofstream file(path);
+            file << json.dump();
+        }
     }
 };
