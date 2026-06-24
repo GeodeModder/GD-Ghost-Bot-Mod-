@@ -1,17 +1,22 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
+#include <Geode/binding/CheckpointGameObject.hpp>
 #include <filesystem>
 #include <fstream>
+#include <string>
 
 using namespace geode::prelude;
 
+// ==========================================
+// 🏗️ GHOST DATA STRUCTURES
+// ==========================================
 struct Frame { float x, y, rot; };
 static std::vector<std::vector<Frame>> g_segments;
 static std::vector<Frame> g_currentSegment;
 
 // ==========================================
-// 🏗️ SEGMENTED RECORDING ENGINE
+// 🕹️ SEGMENTED RECORDING ENGINE
 // ==========================================
 struct $modify(GhostPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool usePractice, bool isPlatformer) {
@@ -28,7 +33,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    // FIXED: Parameter type is CheckpointGameObject*
+    // FIXED: Correct type for checkpoint parameter
     void checkpointActivated(CheckpointGameObject* obj) {
         PlayLayer::checkpointActivated(obj);
         g_segments.push_back(g_currentSegment);
@@ -47,16 +52,23 @@ struct $modify(GhostPlayLayer, PlayLayer) {
 class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
     int m_levelID;
 
-    // This handles the "Yes/No" button clicks
+    // FLAlertLayerProtocol implementation
     void FLAlert_Clicked(FLAlertLayer* btn, bool btn2) override {
-        if (btn2) { // "Yes" button (button 2)
-            auto path = btn->getTag(); // We'll store the path pointer in the tag or handle differently
-            // Actually, for simplicity, let's keep it clean:
+        if (btn2) { // "Yes" button
+            auto pathPtr = static_cast<std::string*>(btn->getUserData());
+            if (pathPtr) {
+                std::filesystem::remove(*pathPtr);
+                delete pathPtr; 
+            }
+        } else {
+            // "No" button
+            auto pathPtr = static_cast<std::string*>(btn->getUserData());
+            delete pathPtr;
         }
     }
 
     bool init(int levelID) {
-        if (!FLAlertLayer::create(nullptr, "Ghost Manager", "OK", nullptr, 350.f)) return false;
+        if (!FLAlertLayer::init(this, "Ghost Manager", "Select ghost to delete", "OK", nullptr, 350.f)) return false;
         m_levelID = levelID;
         
         auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
@@ -68,10 +80,12 @@ class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
         for (auto const& entry : std::filesystem::directory_iterator(saveDir)) {
             std::string filename = entry.path().filename().string();
             if (filename.find(std::to_string(levelID) + "_") != std::string::npos) {
+                auto pathCopy = new std::string(entry.path().string());
+                
                 auto btn = CCMenuItemSpriteExtra::create(
                     ButtonSprite::create(filename.c_str(), "goldFont.fnt", "GJ_button_01.png"), 
                     this, menu_selector(GhostPopup::onGhostSelected));
-                btn->setUserData(new std::string(entry.path().string()));
+                btn->setUserData(pathCopy); 
                 btn->setPosition({0, 80.f - (i * 40.f)});
                 menu->addChild(btn);
                 i++;
@@ -81,10 +95,10 @@ class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
     }
 
     void onGhostSelected(CCObject* sender) {
-        auto pathStr = *static_cast<std::string*>(static_cast<CCMenuItem*>(sender)->getUserData());
-        // Standard GD Alert
+        auto pathPtr = static_cast<std::string*>(static_cast<CCMenuItem*>(sender)->getUserData());
+        
         auto alert = FLAlertLayer::create(this, "Delete?", "Are you sure you want to delete this ghost?", "No", "Yes");
-        alert->setTag((int)new std::string(pathStr)); // Sneaky way to pass the string
+        alert->setUserData(new std::string(*pathPtr)); 
         alert->show();
     }
 
@@ -92,13 +106,13 @@ public:
     static void show(int id) {
         auto p = new GhostPopup();
         if (p && p->init(id)) {
-            static_cast<FLAlertLayer*>(p->autorelease())->show();
+            p->show();
         }
     }
 };
 
 // ==========================================
-// ⏸️ PAUSE MENU
+// ⏸️ PAUSE MENU HOOK
 // ==========================================
 struct $modify(MyPauseLayer, PauseLayer) {
     void customSetup() {
