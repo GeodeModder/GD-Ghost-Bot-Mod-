@@ -24,6 +24,7 @@ struct CustomGhostProfile {
     std::vector<GhostFrame> frames;
 };
 
+// Global cache to hold data even if level resets
 static std::vector<GhostFrame> g_lastAttemptData;
 
 struct LiveGhostTrack {
@@ -32,11 +33,10 @@ struct LiveGhostTrack {
     std::string filePath;
 };
 
-// Forward declaration of state synchronizer
 void refreshGhostsForLayer(PlayLayer* pl);
 
 // ==========================================
-// 📦 SAFE MATJSON SERIALIZATION (GEODE V5)
+// 📦 JSON SERIALIZATION
 // ==========================================
 template <>
 struct matjson::Serialize<GhostFrame> {
@@ -46,8 +46,6 @@ struct matjson::Serialize<GhostFrame> {
         if (value.contains("y")) frame.position.y = static_cast<float>(value["y"].asDouble().unwrapOrDefault());
         if (value.contains("rot")) frame.rotation = static_cast<float>(value["rot"].asDouble().unwrapOrDefault());
         if (value.contains("u")) frame.isUpsideDown = value["u"].asBool().unwrapOrDefault();
-        if (value.contains("type")) frame.type = value["type"].asInt().unwrapOrDefault();
-        if (value.contains("id")) frame.id = value["id"].asInt().unwrapOrDefault();
         return geode::Ok(frame);
     }
     static matjson::Value toJson(GhostFrame const& value) {
@@ -55,8 +53,6 @@ struct matjson::Serialize<GhostFrame> {
         obj["x"] = static_cast<double>(value.position.x);
         obj["y"] = static_cast<double>(value.position.y);
         obj["rot"] = static_cast<double>(value.rotation);
-        obj["type"] = value.type;
-        obj["id"] = value.id;
         obj["u"] = value.isUpsideDown;
         return obj;
     }
@@ -87,7 +83,7 @@ struct matjson::Serialize<CustomGhostProfile> {
 };
 
 // ==========================================
-// 🕹️ PLAYBACK & RECORDING ENGINE HOOKS
+// 🕹️ PLAYLAYER HOOK
 // ==========================================
 struct $modify(MyPlayLayer, PlayLayer) {
     struct Fields {
@@ -112,7 +108,6 @@ struct $modify(MyPlayLayer, PlayLayer) {
         PlayLayer::update(dt);
         m_fields->m_frameCounter++;
 
-        // Record live frame
         if (m_player1 && !m_player1->m_isDead) {
             GhostFrame currentFrame {
                 .position = m_player1->getPosition(),
@@ -120,22 +115,21 @@ struct $modify(MyPlayLayer, PlayLayer) {
                 .isUpsideDown = m_player1->m_isUpsideDown
             };
             m_fields->m_liveRecording.push_back(currentFrame);
+            
+            if (m_fields->m_liveRecording.size() > 5) {
+                g_lastAttemptData = m_fields->m_liveRecording;
+            }
         }
 
         size_t playbackIndex = static_cast<size_t>(m_fields->m_frameCounter);
 
-        // Process active ghost paths inside game loop
         for (auto& ghost : m_fields->m_activeGhosts) {
             if (!ghost.sprite && m_objectLayer) {
                 ghost.sprite = cocos2d::CCSprite::createWithSpriteFrameName("square02_001.png");
                 if (ghost.sprite) {
-                    ghost.sprite->setColor({
-                        static_cast<unsigned char>(ghost.profile.r),
-                        static_cast<unsigned char>(ghost.profile.g),
-                        static_cast<unsigned char>(ghost.profile.b)
-                    });
-                    ghost.sprite->setOpacity(130);
-                    ghost.sprite->setScale(0.55f);
+                    ghost.sprite->setColor({(unsigned char)ghost.profile.r, (unsigned char)ghost.profile.g, (unsigned char)ghost.profile.b});
+                    ghost.sprite->setOpacity(120);
+                    ghost.sprite->setScale(0.5f);
                     ghost.sprite->setVisible(false);
                     m_objectLayer->addChild(ghost.sprite, 2000);
                 }
@@ -145,7 +139,7 @@ struct $modify(MyPlayLayer, PlayLayer) {
                 auto const& f = ghost.profile.frames[playbackIndex];
                 ghost.sprite->setPosition(f.position);
                 ghost.sprite->setRotation(f.rotation);
-                ghost.sprite->setScaleY(f.isUpsideDown ? -0.55f : 0.55f);
+                ghost.sprite->setScaleY(f.isUpsideDown ? -0.5f : 0.5f);
                 ghost.sprite->setVisible(true);
             } else if (ghost.sprite) {
                 ghost.sprite->setVisible(false);
@@ -154,36 +148,31 @@ struct $modify(MyPlayLayer, PlayLayer) {
     }
 
     void resetLevel() {
-        if (m_fields->m_liveRecording.size() > 15) { 
+        if (m_fields->m_liveRecording.size() > 5) { 
             g_lastAttemptData = m_fields->m_liveRecording;
         }
         PlayLayer::resetLevel();
         m_fields->m_liveRecording.clear();
         m_fields->m_frameCounter = 0;
-        
         refreshGhostsForLayer(this);
     }
 };
 
 // ==========================================
-// 🛠️ ACTIVE RUNTIME GRAPHICS SYNCHRONIZER
+// 🛠️ REFRESHER
 // ==========================================
 void refreshGhostsForLayer(PlayLayer* pl) {
     if (!pl) return;
     auto myPl = static_cast<MyPlayLayer*>(pl);
-    
     for (auto& ghost : myPl->m_fields->m_activeGhosts) {
-        if (ghost.sprite) {
-            ghost.sprite->removeFromParentAndCleanup(true);
-            ghost.sprite = nullptr;
-        }
+        if (ghost.sprite) ghost.sprite->removeFromParentAndCleanup(true);
     }
     myPl->m_fields->m_activeGhosts.clear();
 
     auto saveDir = geode::Mod::get()->getSaveDir();
     std::filesystem::create_directories(saveDir);
-
     std::string prefix = "ghost_" + std::to_string(myPl->m_fields->m_levelID) + "_";
+    
     for (auto const& entry : std::filesystem::directory_iterator(saveDir)) {
         std::string filename = entry.path().filename().string();
         if (filename.rfind(prefix, 0) == 0 && filename.substr(filename.find_last_of('.')) == ".json") {
@@ -197,7 +186,6 @@ void refreshGhostsForLayer(PlayLayer* pl) {
                         LiveGhostTrack track;
                         track.profile = profileRes.unwrap();
                         track.filePath = entry.path().string();
-                        track.sprite = nullptr;
                         myPl->m_fields->m_activeGhosts.push_back(track);
                     }
                 }
@@ -207,124 +195,83 @@ void refreshGhostsForLayer(PlayLayer* pl) {
 }
 
 // ==========================================
-// 🎛️ BULLETPROOF CUSTOM POPUP COMPONENT (FLAlertLayer)
+// 🎛️ POPUP UI
 // ==========================================
 class AdvancedGhostPopup : public FLAlertLayer {
 protected:
     int m_levelID;
     CCTextInputNode* m_inputField = nullptr;
-    cocos2d::CCLabelBMFont* m_statusLabel = nullptr;
 
     bool init(int levelID) {
-        // Initialize FLAlertLayer with a standard dark background opacity
         if (!FLAlertLayer::init(150)) return false;
-
         m_levelID = levelID;
         auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
 
-        // 1. Base Layer Background Box
         auto bg = cocos2d::extension::CCScale9Sprite::create("GJ_square01.png");
         bg->setContentSize({340.f, 210.f});
         bg->setPosition(winSize / 2);
         m_mainLayer->addChild(bg);
 
-        // 2. Title Text
         auto title = cocos2d::CCLabelBMFont::create("Custom Ghost Control Room", "goldFont.fnt");
         title->setPosition({winSize.width / 2, winSize.height / 2 + 82.f});
         title->setScale(0.7f);
         m_mainLayer->addChild(title);
 
-        // 3. Action Control Menu
         auto menu = cocos2d::CCMenu::create();
         menu->setPosition({0, 0});
         m_mainLayer->addChild(menu);
 
-        // 4. Close Button
-        auto closeSprite = cocos2d::CCSprite::createWithSpriteFrameName("GJ_closeBtn_001.png");
-        auto closeBtn = CCMenuItemSpriteExtra::create(closeSprite, this, menu_selector(AdvancedGhostPopup::onCloseBtn));
+        auto closeBtn = CCMenuItemSpriteExtra::create(cocos2d::CCSprite::createWithSpriteFrameName("GJ_closeBtn_001.png"), this, menu_selector(AdvancedGhostPopup::onCloseBtn));
         closeBtn->setPosition({winSize.width / 2 - 155.f, winSize.height / 2 + 90.f});
         menu->addChild(closeBtn);
 
-        // 5. Input Text Field
         m_inputField = CCTextInputNode::create(180.f, 30.f, "Name your ghost...", "bigFont.fnt");
         m_inputField->setPosition({winSize.width / 2, winSize.height / 2 + 32.f});
-        m_inputField->setAllowedChars("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ");
-        m_inputField->setMaxLabelLength(16);
         m_mainLayer->addChild(m_inputField);
 
-        // 6. Active Frame Cache Status Label
         std::string statStr = g_lastAttemptData.empty() ? "No run data cached." : "Cached Run: " + std::to_string(g_lastAttemptData.size()) + " frames";
-        m_statusLabel = cocos2d::CCLabelBMFont::create(statStr.c_str(), "goldFont.fnt");
-        m_statusLabel->setScale(0.35f);
-        m_statusLabel->setPosition({winSize.width / 2, winSize.height / 2 + 2.f});
-        m_mainLayer->addChild(m_statusLabel);
+        auto status = cocos2d::CCLabelBMFont::create(statStr.c_str(), "goldFont.fnt");
+        status->setScale(0.35f);
+        status->setPosition({winSize.width / 2, winSize.height / 2 + 2.f});
+        m_mainLayer->addChild(status);
 
-        // 7. Color Assignment Buttons Layout
         float startX = winSize.width / 2 - 100.f;
-        float spacing = 50.f;
         float yPos = winSize.height / 2 - 38.f;
+        float spacing = 50.f;
 
-        auto cBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("CYN", "goldFont.fnt", "GJ_button_01.png"), this, menu_selector(AdvancedGhostPopup::onCyan));
-        cBtn->setPosition({startX + (0 * spacing), yPos}); cBtn->setScale(0.7f);
-        menu->addChild(cBtn);
+        auto makeBtn = [&](const char* text, const char* asset, SEL_MenuHandler selector, int index) {
+            auto btn = CCMenuItemSpriteExtra::create(ButtonSprite::create(text, "goldFont.fnt", asset), this, selector);
+            btn->setPosition({startX + (index * spacing), yPos});
+            btn->setScale(0.7f);
+            menu->addChild(btn);
+        };
 
-        auto gBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("GLD", "goldFont.fnt", "goldButton_001.png"), this, menu_selector(AdvancedGhostPopup::onGold));
-        gBtn->setPosition({startX + (1 * spacing), yPos}); gBtn->setScale(0.7f);
-        menu->addChild(gBtn);
+        makeBtn("CYN", "GJ_button_01.png", menu_selector(AdvancedGhostPopup::onCyan), 0);
+        makeBtn("GLD", "GJ_button_03.png", menu_selector(AdvancedGhostPopup::onGold), 1);
+        makeBtn("RED", "GJ_button_06.png", menu_selector(AdvancedGhostPopup::onRed), 2);
+        makeBtn("GRN", "GJ_button_02.png", menu_selector(AdvancedGhostPopup::onGreen), 3);
+        makeBtn("PRP", "GJ_button_04.png", menu_selector(AdvancedGhostPopup::onPurple), 4);
 
-        auto rBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("RED", "goldFont.fnt", "GJ_button_06.png"), this, menu_selector(AdvancedGhostPopup::onRed));
-        rBtn->setPosition({startX + (2 * spacing), yPos}); rBtn->setScale(0.7f);
-        menu->addChild(rBtn);
-
-        auto grBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("GRN", "goldFont.fnt", "GJ_button_02.png"), this, menu_selector(AdvancedGhostPopup::onGreen));
-        grBtn->setPosition({startX + (3 * spacing), yPos}); grBtn->setScale(0.7f);
-        menu->addChild(grBtn);
-
-        auto pBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("PRP", "goldFont.fnt", "GJ_button_04.png"), this, menu_selector(AdvancedGhostPopup::onPurple));
-        pBtn->setPosition({startX + (4 * spacing), yPos}); pBtn->setScale(0.7f);
-        menu->addChild(pBtn);
-
-        this->setKeypadEnabled(true);
         return true;
     }
 
     void saveWithColor(int r, int g, int b) {
         if (g_lastAttemptData.empty()) {
-            FLAlertLayer::create("Error", "No run data available! Complete a run first.", "OK")->show();
+            FLAlertLayer::create("Error", "No run data!", "OK")->show();
             return;
         }
-
-        std::string ghostName = m_inputField->getString();
-        if (ghostName.empty()) ghostName = "Custom Ghost";
-
-        CustomGhostProfile prof{ ghostName, r, g, b, g_lastAttemptData };
-
-        auto saveDir = geode::Mod::get()->getSaveDir();
-        std::string filename = "ghost_" + std::to_string(m_levelID) + "_" + std::to_string(std::time(nullptr)) + ".json";
-        
-        std::ofstream file(saveDir / filename);
+        std::string name = m_inputField->getString();
+        CustomGhostProfile prof{ name.empty() ? "Ghost" : name, r, g, b, g_lastAttemptData };
+        std::string filename = "ghost_" + std::to_string(m_levelID) + "_" + std::to_string(time(0)) + ".json";
+        std::ofstream file(geode::Mod::get()->getSaveDir() / filename);
         matjson::Value json = prof;
         file << json.dump();
         file.close();
-
-        auto playLayer = PlayLayer::get();
-        if (playLayer) {
-            refreshGhostsForLayer(playLayer);
-        }
-
-        FLAlertLayer::create("Saved!", "'" + ghostName + "' is ready! Unpause to race.", "OK")->show();
+        if (auto pl = PlayLayer::get()) refreshGhostsForLayer(pl);
         onCloseBtn(nullptr);
     }
 
-    void onCloseBtn(cocos2d::CCObject*) {
-        this->setKeypadEnabled(false);
-        this->removeFromParentAndCleanup(true);
-    }
-
-    void keyBackClicked() override {
-        onCloseBtn(nullptr);
-    }
-
+    void onCloseBtn(cocos2d::CCObject*) { removeFromParentAndCleanup(true); }
     void onCyan(cocos2d::CCObject*) { saveWithColor(0, 255, 255); }
     void onGold(cocos2d::CCObject*) { saveWithColor(255, 215, 0); }
     void onRed(cocos2d::CCObject*) { saveWithColor(255, 60, 60); }
@@ -332,46 +279,29 @@ protected:
     void onPurple(cocos2d::CCObject*) { saveWithColor(190, 60, 255); }
 
 public:
-    static AdvancedGhostPopup* create(int levelID) {
+    static AdvancedGhostPopup* create(int id) {
         auto ret = new AdvancedGhostPopup();
-        if (ret && ret->init(levelID)) {
-            ret->autorelease();
-            return ret;
-        }
-        CC_SAFE_DELETE(ret);
-        return nullptr;
+        if (ret && ret->init(id)) { ret->autorelease(); return ret; }
+        CC_SAFE_DELETE(ret); return nullptr;
     }
 };
 
-// ==========================================
-// ⏸️ PAUSE MENU INTEGRATION
-// ==========================================
 struct $modify(MyPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
         auto menu = this->getChildByID("right-button-menu");
         if (!menu) menu = this->getChildByID("center-button-menu");
-        
         if (menu) {
-            auto sprite = cocos2d::CCSprite::createWithSpriteFrameName("GJ_downloadsIcon_001.png");
-            auto btn = CCMenuItemSpriteExtra::create(sprite, this, menu_selector(MyPauseLayer::onOpenCustomGhostManager));
-            btn->setID("ghost-manager-button"_spr);
+            auto btn = CCMenuItemSpriteExtra::create(cocos2d::CCSprite::createWithSpriteFrameName("GJ_downloadsIcon_001.png"), this, menu_selector(MyPauseLayer::onOpen));
             menu->addChild(btn);
             menu->updateLayout();
         }
     }
-
-    void onOpenCustomGhostManager(cocos2d::CCObject*) {
-        auto playLayer = PlayLayer::get();
-        if (playLayer) {
-            auto myPlayLayer = static_cast<MyPlayLayer*>(playLayer);
-            if (!myPlayLayer->m_fields->m_liveRecording.empty()) {
-                g_lastAttemptData = myPlayLayer->m_fields->m_liveRecording;
-            }
-            auto popup = AdvancedGhostPopup::create(playLayer->m_level->m_levelID);
-            if (popup) {
-                popup->show();
-            }
+    void onOpen(cocos2d::CCObject*) {
+        if (auto pl = PlayLayer::get()) {
+            auto myPl = static_cast<MyPlayLayer*>(pl);
+            if (!myPl->m_fields->m_liveRecording.empty()) g_lastAttemptData = myPl->m_fields->m_liveRecording;
+            AdvancedGhostPopup::create(pl->m_level->m_levelID)->show();
         }
     }
 };
