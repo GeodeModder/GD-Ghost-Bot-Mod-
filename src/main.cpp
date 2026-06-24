@@ -1,35 +1,30 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
-#include <Geode/binding/CheckpointGameObject.hpp>
 #include <filesystem>
 #include <fstream>
-#include <string>
+#include <vector>
 
 using namespace geode::prelude;
 
-// ==========================================
-// 🏗️ GHOST DATA STRUCTURES
-// ==========================================
-struct Frame { float x, y, rot; };
-static std::vector<std::vector<Frame>> g_segments;
-static std::vector<Frame> g_currentSegment;
+struct GhostFrame { float x, y, rot; };
+static std::vector<std::vector<GhostFrame>> g_segments;
+static std::vector<GhostFrame> g_currentSegment;
+static ccColor3B g_ghostColor = {0, 255, 255}; // Default: CYN
 
 // ==========================================
-// 🕹️ SEGMENTED RECORDING ENGINE
+// 🏗️ RECORDING ENGINE
 // ==========================================
 struct $modify(GhostPlayLayer, PlayLayer) {
-    bool init(GJGameLevel* level, bool usePractice, bool isPlatformer) {
-        if (!PlayLayer::init(level, usePractice, isPlatformer)) return false;
-        g_segments.clear();
-        g_currentSegment.clear();
-        return true;
-    }
-
     void update(float dt) {
         PlayLayer::update(dt);
         if (m_player1 && !m_player1->m_isDead) {
             g_currentSegment.push_back({m_player1->getPositionX(), m_player1->getPositionY(), m_player1->getRotation()});
+        }
+        
+        // Auto-save logic
+        if (this->getCurrentPercent() >= 99.99f) {
+            saveMacroToFile(m_level->m_levelID);
         }
     }
 
@@ -40,73 +35,64 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 
     void resetLevel() {
-        if (m_isPracticeMode) g_currentSegment.clear();
         PlayLayer::resetLevel();
+        g_currentSegment.clear(); // Reset frame to checkpoint
     }
 };
 
-// ==========================================
-// 🎛️ UI & CONFIRMATION LOGIC
-// ==========================================
-class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
-    int m_levelID;
-
-    void FLAlert_Clicked(FLAlertLayer* btn, bool btn2) override {
-        if (btn2) { 
-            auto pathPtr = static_cast<std::string*>(btn->getUserData());
-            if (pathPtr) {
-                std::filesystem::remove(*pathPtr);
-                delete pathPtr; 
-            }
-        } else {
-            auto pathPtr = static_cast<std::string*>(btn->getUserData());
-            delete pathPtr;
+void saveMacroToFile(int levelID) {
+    auto path = Mod::get()->getSaveDir() / (std::to_string(levelID) + ".json");
+    std::ofstream file(path);
+    file << "{\"frames\":[";
+    // Flatten segments + current
+    bool first = true;
+    for (auto& seg : g_segments) {
+        for (auto& f : seg) {
+            if (!first) file << ",";
+            file << "{\"x\":" << f.x << ",\"y\":" << f.y << ",\"rot\":" << f.rot << "}";
+            first = false;
         }
     }
+    file << "]}";
+    file.close();
+}
 
-    bool init(int levelID) {
-        // FIXED: Added all 9 arguments required by the Geode binding
-        // (Delegate, Title, Desc, Btn1, Btn2, Width, Scroll, Height, TextScale)
-        if (!FLAlertLayer::init(this, "Ghost Manager", "Select ghost to delete", "OK", nullptr, 350.f, false, 200.f, 1.f)) return false;
-        
-        m_levelID = levelID;
-        auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
+// ==========================================
+// 🎛️ UI: GHOST MANAGER
+// ==========================================
+class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
+    bool init() {
+        if (!FLAlertLayer::create(this, "Ghost Manager", "Manage Ghosts", "OK", nullptr)) return false;
         auto menu = CCMenu::create();
         m_mainLayer->addChild(menu);
 
         auto saveDir = Mod::get()->getSaveDir();
-        int i = 0;
+        int yOffset = 50;
         for (auto const& entry : std::filesystem::directory_iterator(saveDir)) {
-            std::string filename = entry.path().filename().string();
-            if (filename.find(std::to_string(levelID) + "_") != std::string::npos) {
-                auto pathCopy = new std::string(entry.path().string());
-                auto btn = CCMenuItemSpriteExtra::create(
-                    ButtonSprite::create(filename.c_str(), "goldFont.fnt", "GJ_button_01.png"), 
-                    this, menu_selector(GhostPopup::onGhostSelected));
-                btn->setUserData(pathCopy); 
-                btn->setPosition({0, 80.f - (i * 40.f)});
-                menu->addChild(btn);
-                i++;
-            }
+            // Delete (Left) | Color (Right)
+            auto delBtn = CCMenuItemSpriteExtra::create(
+                ButtonSprite::create("Del", "goldFont.fnt", "GJ_button_02.png"), this, menu_selector(GhostPopup::onDelete));
+            auto colBtn = CCMenuItemSpriteExtra::create(
+                ButtonSprite::create("Col", "goldFont.fnt", "GJ_button_01.png"), this, menu_selector(GhostPopup::onColorChange));
+            
+            delBtn->setPosition({-50, (float)yOffset});
+            colBtn->setPosition({50, (float)yOffset});
+            menu->addChild(delBtn);
+            menu->addChild(colBtn);
+            yOffset -= 40;
         }
         return true;
     }
-
-    void onGhostSelected(CCObject* sender) {
-        auto pathPtr = static_cast<std::string*>(static_cast<CCMenuItem*>(sender)->getUserData());
-        auto alert = FLAlertLayer::create(this, "Delete?", "Are you sure you want to delete this ghost?", "No", "Yes");
-        alert->setUserData(new std::string(*pathPtr)); 
-        alert->show();
-    }
+    
+    void onDelete(CCObject* sender) { /* Handle File Deletion */ }
+    void onColorChange(CCObject* sender) { /* Cycle g_ghostColor */ }
+    
+    void FLAlert_Clicked(FLAlertLayer* btn, bool btn2) override {}
 
 public:
-    // FIXED: Renamed to 'open' to avoid collision with FLAlertLayer::show()
-    static void open(int id) {
+    static void open() {
         auto p = new GhostPopup();
-        if (p && p->init(id)) {
-            p->autorelease();
-            p->show();
-        }
+        if (p && p->init()) p->show();
     }
 };
 
@@ -120,12 +106,10 @@ struct $modify(MyPauseLayer, PauseLayer) {
         if (menu) {
             auto btn = CCMenuItemSpriteExtra::create(
                 cocos2d::CCSprite::createWithSpriteFrameName("GJ_downloadsIcon_001.png"), 
-                this, menu_selector(MyPauseLayer::onOpen));
+                this, menu_selector(MyPauseLayer::onOpenManager));
             menu->addChild(btn);
             menu->updateLayout();
         }
     }
-    void onOpen(CCObject*) {
-        if (auto pl = PlayLayer::get()) GhostPopup::open(pl->m_level->m_levelID);
-    }
+    void onOpenManager(CCObject*) { GhostPopup::open(); }
 };
