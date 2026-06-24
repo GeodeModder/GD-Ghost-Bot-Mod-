@@ -3,48 +3,46 @@
 #include <Geode/modify/PauseLayer.hpp>
 #include <filesystem>
 #include <fstream>
-#include <vector>
 
 using namespace geode::prelude;
 
-struct GhostFrame { float x, y, rot; };
-static std::vector<std::vector<GhostFrame>> g_segments;
-static std::vector<GhostFrame> g_currentSegment;
-static ccColor3B g_ghostColor = {0, 255, 255}; 
+// Storage
+static std::vector<std::vector<cocos2d::CCPoint>> g_segments;
+static std::vector<cocos2d::CCPoint> g_currentSegment;
+static cocos2d::CCSprite* g_ghostSprite = nullptr;
 
 // ==========================================
-// 💾 FILE ENGINE (Declared first so the compiler can find them)
-// ==========================================
-void saveMacroToFile(int levelID) {
-    auto path = Mod::get()->getSaveDir() / (std::to_string(levelID) + ".json");
-    std::ofstream file(path);
-    file << "{\"frames\":[";
-    bool first = true;
-    for (auto& seg : g_segments) {
-        for (auto& f : seg) {
-            if (!first) file << ",";
-            file << "{\"x\":" << f.x << ",\"y\":" << f.y << ",\"rot\":" << f.rot << "}";
-            first = false;
-        }
-    }
-    file << "]}";
-    file.close();
-    Notification::create("Macro Saved as " + std::to_string(levelID) + ".json", NotificationIcon::Success)->show();
-}
-
-// ==========================================
-// 🕹️ RECORDING ENGINE
+// 🕹️ PLAYLAYER RECORDING & RENDERING
 // ==========================================
 struct $modify(GhostPlayLayer, PlayLayer) {
+    bool init(GJGameLevel* level, bool usePractice, bool isPlatformer) {
+        if (!PlayLayer::init(level, usePractice, isPlatformer)) return false;
+        
+        // Ensure ghost sprite exists
+        if (!g_ghostSprite) {
+            g_ghostSprite = cocos2d::CCSprite::createWithSpriteFrameName("square02_001.png");
+            g_ghostSprite->setColor({0, 255, 255}); // CYN
+            g_ghostSprite->setOpacity(150);
+            this->m_objectLayer->addChild(g_ghostSprite, 999);
+        }
+        g_ghostSprite->setVisible(true);
+
+        g_segments.clear();
+        g_currentSegment.clear();
+        return true;
+    }
+
     void update(float dt) {
         PlayLayer::update(dt);
-        if (m_player1 && !m_player1->m_isDead) {
-            g_currentSegment.push_back({m_player1->getPositionX(), m_player1->getPositionY(), m_player1->getRotation()});
-        }
         
-        // Auto-save at 99.99%
-        if (this->getCurrentPercent() >= 99.99f) {
-            saveMacroToFile(m_level->m_levelID);
+        // Recording
+        if (m_player1 && !m_player1->m_isDead) {
+            g_currentSegment.push_back({m_player1->getPositionX(), m_player1->getPositionY()});
+            
+            // Rendering - Simple playback
+            if (!g_currentSegment.empty()) {
+                g_ghostSprite->setPosition(g_currentSegment.back());
+            }
         }
     }
 
@@ -56,51 +54,56 @@ struct $modify(GhostPlayLayer, PlayLayer) {
 
     void resetLevel() {
         PlayLayer::resetLevel();
-        g_currentSegment.clear(); // Reset frame to checkpoint
+        g_currentSegment.clear();
     }
 };
 
 // ==========================================
-// 🎛️ GHOST MANAGER UI
+// 🎛️ UI GHOST MANAGER
 // ==========================================
-class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
+class GhostPopup : public FLAlertLayer {
 public:
-    bool init() override { // Marked as override
-        if (!FLAlertLayer::create(this, "Ghost Manager", "Select Action", "OK", nullptr)) return false;
+    static GhostPopup* create() {
+        auto ret = new GhostPopup();
+        if (ret && ret->init()) {
+            ret->autorelease();
+            return ret;
+        }
+        CC_SAFE_DELETE(ret);
+        return nullptr;
+    }
+
+    bool init() override {
+        // Safe standard init
+        if (!FLAlertLayer::init(nullptr, "Ghost Manager", "OK", nullptr, 350.f)) return false;
+        
         auto menu = CCMenu::create();
+        menu->setPosition({0, 0});
         m_mainLayer->addChild(menu);
 
-        auto saveDir = Mod::get()->getSaveDir();
-        int yOffset = 50;
-        for (auto const& entry : std::filesystem::directory_iterator(saveDir)) {
-            // Left: Delete, Right: Color
-            auto delBtn = CCMenuItemSpriteExtra::create(
-                ButtonSprite::create("Del", "goldFont.fnt", "GJ_button_02.png"), this, menu_selector(GhostPopup::onDelete));
-            auto colBtn = CCMenuItemSpriteExtra::create(
-                ButtonSprite::create("Col", "goldFont.fnt", "GJ_button_01.png"), this, menu_selector(GhostPopup::onColorChange));
-            
-            delBtn->setPosition({-50, (float)yOffset});
-            colBtn->setPosition({50, (float)yOffset});
-            menu->addChild(delBtn);
-            menu->addChild(colBtn);
-            yOffset -= 40;
-        }
+        auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
+        
+        // Delete Left
+        auto delBtn = CCMenuItemSpriteExtra::create(
+            ButtonSprite::create("Del", "goldFont.fnt", "GJ_button_02.png"), this, menu_selector(GhostPopup::onDelete));
+        delBtn->setPosition({winSize.width/2 - 80, winSize.height/2});
+        menu->addChild(delBtn);
+
+        // Color Right
+        auto colBtn = CCMenuItemSpriteExtra::create(
+            ButtonSprite::create("Col", "goldFont.fnt", "GJ_button_01.png"), this, menu_selector(GhostPopup::onColorChange));
+        colBtn->setPosition({winSize.width/2 + 80, winSize.height/2});
+        menu->addChild(colBtn);
+
         return true;
     }
-    
-    void onDelete(CCObject*) { Notification::create("Delete Logic Triggered", NotificationIcon::Info)->show(); }
-    void onColorChange(CCObject*) { Notification::create("Color Swapped", NotificationIcon::Info)->show(); }
-    
-    void FLAlert_Clicked(FLAlertLayer* btn, bool btn2) override {}
 
-    static void open() {
-        auto p = new GhostPopup();
-        if (p && p->init()) p->show();
-    }
+    void onDelete(CCObject*) { Notification::create("Delete Action", NotificationIcon::Info)->show(); }
+    void onColorChange(CCObject*) { Notification::create("Color Action", NotificationIcon::Info)->show(); }
 };
 
 // ==========================================
-// ⏸️ PAUSE MENU HOOK
+// ⏸️ PAUSE MENU
 // ==========================================
 struct $modify(MyPauseLayer, PauseLayer) {
     void customSetup() {
@@ -109,10 +112,13 @@ struct $modify(MyPauseLayer, PauseLayer) {
         if (menu) {
             auto btn = CCMenuItemSpriteExtra::create(
                 cocos2d::CCSprite::createWithSpriteFrameName("GJ_downloadsIcon_001.png"), 
-                this, menu_selector(MyPauseLayer::onOpenManager));
+                this, menu_selector(MyPauseLayer::onOpen));
             menu->addChild(btn);
             menu->updateLayout();
         }
     }
-    void onOpenManager(CCObject*) { GhostPopup::open(); }
+    void onOpen(CCObject*) {
+        auto popup = GhostPopup::create();
+        popup->show();
+    }
 };
