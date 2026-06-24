@@ -1,5 +1,4 @@
 #include <Geode/Geode.hpp>
-#include <Geode/ui/Popup.hpp> // 💡 FIXED: The missing header that solves the popup crash!
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
 #include <fstream>
@@ -11,7 +10,6 @@
 
 using namespace geode::prelude;
 
-// Updated to perfectly match your saved.json schema keys
 struct GhostFrame {
     cocos2d::CCPoint position;
     float rotation;
@@ -20,7 +18,6 @@ struct GhostFrame {
     bool isUpsideDown = false;
 };
 
-// Custom user identity container 
 struct CustomGhostProfile {
     std::string name;
     int r = 0, g = 255, b = 255; 
@@ -28,7 +25,7 @@ struct CustomGhostProfile {
 };
 
 // ==========================================
-// 📦 MATJSON SERIALIZERS (HANDLES BOTH FORMATS)
+// 📦 MATJSON SERIALIZATION (GEODE V5)
 // ==========================================
 template <>
 struct matjson::Serialize<GhostFrame> {
@@ -36,7 +33,6 @@ struct matjson::Serialize<GhostFrame> {
         GEODE_UNWRAP_INTO(double x, value["x"].asDouble());
         GEODE_UNWRAP_INTO(double y, value["y"].asDouble());
         
-        // Smart fallback: reads "rot" from flat files or "r" from profiles
         double rot = 0.0;
         if (value.contains("rot")) {
             GEODE_UNWRAP_INTO(rot, value["rot"].asDouble());
@@ -111,7 +107,7 @@ struct LiveGhostTrack {
 };
 
 // ==========================================
-// 🕹️ HOOK: PLAYBACK & ENGINE INTEGRATION
+// 🕹️ PLAYBACK & RECORDING ENGINE
 // ==========================================
 struct $modify(MyPlayLayer, PlayLayer) {
     struct Fields {
@@ -137,29 +133,6 @@ struct $modify(MyPlayLayer, PlayLayer) {
         auto saveDir = geode::Mod::get()->getSaveDir();
         std::filesystem::create_directories(saveDir);
 
-        // 💡 SMART FALLBACK: Instantly scan and read flat "saved.json" arrays if they exist!
-        auto legacyPath = saveDir / "saved.json";
-        if (std::filesystem::exists(legacyPath)) {
-            try {
-                std::ifstream file(legacyPath);
-                std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-                auto json = matjson::parse(str);
-                if (json) {
-                    auto framesRes = json.unwrap().as<std::vector<GhostFrame>>();
-                    if (framesRes) {
-                        LiveGhostTrack track;
-                        track.profile.name = "Imported saved.json";
-                        track.profile.r = 0; track.profile.g = 255; track.profile.b = 255; // Cyan
-                        track.profile.frames = framesRes.unwrap();
-                        track.filePath = legacyPath.string();
-                        track.sprite = nullptr;
-                        m_fields->m_activeGhosts.push_back(track);
-                    }
-                }
-            } catch(...) {}
-        }
-
-        // Standard profile directories loop
         std::string prefix = "ghost_" + std::to_string(m_fields->m_levelID) + "_";
         for (auto const& entry : std::filesystem::directory_iterator(saveDir)) {
             std::string filename = entry.path().filename().string();
@@ -207,7 +180,7 @@ struct $modify(MyPlayLayer, PlayLayer) {
                         static_cast<unsigned char>(ghost.profile.g),
                         static_cast<unsigned char>(ghost.profile.b)
                     });
-                    ghost.sprite->setOpacity(150);
+                    ghost.sprite->setOpacity(130);
                     ghost.sprite->setScale(0.55f);
                     ghost.sprite->setVisible(false);
                     m_objectLayer->addChild(ghost.sprite, 2000);
@@ -240,60 +213,63 @@ struct $modify(MyPlayLayer, PlayLayer) {
 };
 
 // ==========================================
-// 🎛️ UI: STABLE GEODE POPUP MENU
+// 🎛️ FIXED GEODE V5 POPUP COMPONENT
 // ==========================================
-// 💡 FIXED: Inheriting from geode::Popup safely allocates all UI backgrounds automatically!
-class AdvancedGhostPopup : public geode::Popup<int>, public TextInputDelegate {
+class AdvancedGhostPopup : public geode::Popup<> {
 protected:
     int m_levelID;
     CCTextInputNode* m_inputField = nullptr;
     cocos2d::CCLabelBMFont* m_statusLabel = nullptr;
 
-    bool setup(int levelID) override {
-        m_levelID = levelID;
+    // Fixed signature: Geode v5 setup takes zero arguments 
+    bool setup() override {
         auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
-        
+
         this->setTitle("Custom Ghost Control Room");
 
-        // Naming Field Setup
+        // Explicit coordinate-safe input menu
+        auto menu = cocos2d::CCMenu::create();
+        menu->setPosition({0, 0});
+        m_mainLayer->addChild(menu);
+
+        // Text Input Field Setup
         m_inputField = CCTextInputNode::create(180.f, 30.f, "Name your ghost...", "bigFont.fnt");
-        m_inputField->setPosition({winSize.width / 2, winSize.height / 2 + 30.f});
+        m_inputField->setPosition({winSize.width / 2, winSize.height / 2 + 32.f});
         m_inputField->setAllowedChars("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ");
         m_inputField->setMaxLabelLength(16);
-        m_inputField->setDelegate(this);
         m_mainLayer->addChild(m_inputField);
 
-        // Frame Status Label
+        // Run Status Label
         std::string statStr = g_lastAttemptData.empty() ? "No run data cached." : "Cached Run: " + std::to_string(g_lastAttemptData.size()) + " frames";
         m_statusLabel = cocos2d::CCLabelBMFont::create(statStr.c_str(), "goldFont.fnt");
         m_statusLabel->setScale(0.35f);
-        m_statusLabel->setPosition({winSize.width / 2, winSize.height / 2 + 0.f});
+        m_statusLabel->setPosition({winSize.width / 2, winSize.height / 2 + 2.f});
         m_mainLayer->addChild(m_statusLabel);
 
-        // --- 🎨 COLOR BUTTONS ROW ---
+        // Color Button Positions
         float startX = winSize.width / 2 - 100.f;
         float spacing = 50.f;
         float yPos = winSize.height / 2 - 38.f;
 
         auto cBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("CYN", "goldFont.fnt", "GJ_button_01.png"), this, menu_selector(AdvancedGhostPopup::onCyan));
         cBtn->setPosition({startX + (0 * spacing), yPos}); cBtn->setScale(0.7f);
-        m_buttonMenu->addChild(cBtn);
+        menu->addChild(cBtn);
 
         auto gBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("GLD", "goldFont.fnt", "goldButton_001.png"), this, menu_selector(AdvancedGhostPopup::onGold));
         gBtn->setPosition({startX + (1 * spacing), yPos}); gBtn->setScale(0.7f);
-        m_buttonMenu->addChild(gBtn);
+        menu->addChild(gBtn);
 
         auto rBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("RED", "goldFont.fnt", "GJ_button_06.png"), this, menu_selector(AdvancedGhostPopup::onRed));
         rBtn->setPosition({startX + (2 * spacing), yPos}); rBtn->setScale(0.7f);
-        m_buttonMenu->addChild(rBtn);
+        menu->addChild(rBtn);
 
         auto grBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("GRN", "goldFont.fnt", "GJ_button_02.png"), this, menu_selector(AdvancedGhostPopup::onGreen));
         grBtn->setPosition({startX + (3 * spacing), yPos}); grBtn->setScale(0.7f);
-        m_buttonMenu->addChild(grBtn);
+        menu->addChild(grBtn);
 
         auto pBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("PRP", "goldFont.fnt", "GJ_button_04.png"), this, menu_selector(AdvancedGhostPopup::onPurple));
         pBtn->setPosition({startX + (4 * spacing), yPos}); pBtn->setScale(0.7f);
-        m_buttonMenu->addChild(pBtn);
+        menu->addChild(pBtn);
 
         return true;
     }
@@ -330,7 +306,9 @@ protected:
 public:
     static AdvancedGhostPopup* create(int levelID) {
         auto ret = new AdvancedGhostPopup();
-        if (ret && ret->initAnchored(290.f, 170.f, levelID)) {
+        ret->m_levelID = levelID;
+        // Geode v5 initialization style
+        if (ret && ret->init(340.f, 210.f)) {
             ret->autorelease();
             return ret;
         }
@@ -339,6 +317,9 @@ public:
     }
 };
 
+// ==========================================
+// ⏸️ PAUSE MENU INTEGRATION
+// ==========================================
 struct $modify(MyPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
@@ -361,7 +342,10 @@ struct $modify(MyPauseLayer, PauseLayer) {
             if (!myPlayLayer->m_fields->m_liveRecording.empty()) {
                 g_lastAttemptData = myPlayLayer->m_fields->m_liveRecording;
             }
-            AdvancedGhostPopup::create(playLayer->m_level->m_levelID)->show();
+            auto popup = AdvancedGhostPopup::create(playLayer->m_level->m_levelID);
+            if (popup) {
+                popup->show();
+            }
         }
     }
 };
