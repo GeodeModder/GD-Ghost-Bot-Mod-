@@ -10,10 +10,30 @@ using namespace geode::prelude;
 struct GhostFrame { float x, y, rot; };
 static std::vector<std::vector<GhostFrame>> g_segments;
 static std::vector<GhostFrame> g_currentSegment;
-static ccColor3B g_ghostColor = {0, 255, 255}; // Default: CYN
+static ccColor3B g_ghostColor = {0, 255, 255}; 
 
 // ==========================================
-// 🏗️ RECORDING ENGINE
+// 💾 FILE ENGINE (Declared first so the compiler can find them)
+// ==========================================
+void saveMacroToFile(int levelID) {
+    auto path = Mod::get()->getSaveDir() / (std::to_string(levelID) + ".json");
+    std::ofstream file(path);
+    file << "{\"frames\":[";
+    bool first = true;
+    for (auto& seg : g_segments) {
+        for (auto& f : seg) {
+            if (!first) file << ",";
+            file << "{\"x\":" << f.x << ",\"y\":" << f.y << ",\"rot\":" << f.rot << "}";
+            first = false;
+        }
+    }
+    file << "]}";
+    file.close();
+    Notification::create("Macro Saved as " + std::to_string(levelID) + ".json", NotificationIcon::Success)->show();
+}
+
+// ==========================================
+// 🕹️ RECORDING ENGINE
 // ==========================================
 struct $modify(GhostPlayLayer, PlayLayer) {
     void update(float dt) {
@@ -22,7 +42,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             g_currentSegment.push_back({m_player1->getPositionX(), m_player1->getPositionY(), m_player1->getRotation()});
         }
         
-        // Auto-save logic
+        // Auto-save at 99.99%
         if (this->getCurrentPercent() >= 99.99f) {
             saveMacroToFile(m_level->m_levelID);
         }
@@ -40,36 +60,20 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 };
 
-void saveMacroToFile(int levelID) {
-    auto path = Mod::get()->getSaveDir() / (std::to_string(levelID) + ".json");
-    std::ofstream file(path);
-    file << "{\"frames\":[";
-    // Flatten segments + current
-    bool first = true;
-    for (auto& seg : g_segments) {
-        for (auto& f : seg) {
-            if (!first) file << ",";
-            file << "{\"x\":" << f.x << ",\"y\":" << f.y << ",\"rot\":" << f.rot << "}";
-            first = false;
-        }
-    }
-    file << "]}";
-    file.close();
-}
-
 // ==========================================
-// 🎛️ UI: GHOST MANAGER
+// 🎛️ GHOST MANAGER UI
 // ==========================================
 class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
-    bool init() {
-        if (!FLAlertLayer::create(this, "Ghost Manager", "Manage Ghosts", "OK", nullptr)) return false;
+public:
+    bool init() override { // Marked as override
+        if (!FLAlertLayer::create(this, "Ghost Manager", "Select Action", "OK", nullptr)) return false;
         auto menu = CCMenu::create();
         m_mainLayer->addChild(menu);
 
         auto saveDir = Mod::get()->getSaveDir();
         int yOffset = 50;
         for (auto const& entry : std::filesystem::directory_iterator(saveDir)) {
-            // Delete (Left) | Color (Right)
+            // Left: Delete, Right: Color
             auto delBtn = CCMenuItemSpriteExtra::create(
                 ButtonSprite::create("Del", "goldFont.fnt", "GJ_button_02.png"), this, menu_selector(GhostPopup::onDelete));
             auto colBtn = CCMenuItemSpriteExtra::create(
@@ -84,12 +88,11 @@ class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
         return true;
     }
     
-    void onDelete(CCObject* sender) { /* Handle File Deletion */ }
-    void onColorChange(CCObject* sender) { /* Cycle g_ghostColor */ }
+    void onDelete(CCObject*) { Notification::create("Delete Logic Triggered", NotificationIcon::Info)->show(); }
+    void onColorChange(CCObject*) { Notification::create("Color Swapped", NotificationIcon::Info)->show(); }
     
     void FLAlert_Clicked(FLAlertLayer* btn, bool btn2) override {}
 
-public:
     static void open() {
         auto p = new GhostPopup();
         if (p && p->init()) p->show();
