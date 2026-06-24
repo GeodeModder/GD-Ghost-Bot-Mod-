@@ -1,4 +1,4 @@
-#include <Geode/Geode.hpp>
+l#include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <fstream>
 #include <vector>
@@ -58,10 +58,10 @@ struct $modify(MyPlayLayer, PlayLayer) {
         cocos2d::CCSprite* m_normalGhostSprite = nullptr;
         cocos2d::CCSprite* m_coinGhostSprite = nullptr;
 
-        // Tracks the frame index AND the coin pickup status at the time a checkpoint is dropped
         std::map<CheckpointObject*, std::pair<size_t, bool>> m_practiceCheckpoints; 
 
         bool m_collectedCoinThisRun = false;
+        bool m_hasSavedThisRun = false;
         int m_levelID = 0;
     };
 
@@ -70,6 +70,21 @@ struct $modify(MyPlayLayer, PlayLayer) {
 
         m_fields->m_levelID = level->m_levelID;
         m_fields->m_collectedCoinThisRun = false;
+        m_fields->m_hasSavedThisRun = false;
+
+        // Helper lambda to safely instantiate ghost visuals with a robust fallback system
+        auto createGhostVisual = [&](cocos2d::ccColor3B color, GLubyte opacity) -> cocos2d::CCSprite* {
+            cocos2d::CCSprite* sprite = cocos2d::CCSprite::createWithSpriteFrameName("player_square_01_001.png");
+            if (!sprite) sprite = cocos2d::CCSprite::createWithSpriteFrameName("player_01_001.png");
+            if (!sprite) sprite = cocos2d::CCSprite::createWithSpriteFrameName("checkpoint_01_001.png"); // Unfailing asset fallback
+            
+            if (sprite) {
+                sprite->setColor(color);
+                sprite->setOpacity(opacity);
+                sprite->setVisible(false);
+            }
+            return sprite;
+        };
 
         // 1. Load the Normal Ghost Track
         auto normalPath = getGhostPath(m_fields->m_levelID, false);
@@ -82,22 +97,13 @@ struct $modify(MyPlayLayer, PlayLayer) {
                     auto tapeRes = parseResult.unwrap().as<std::vector<GhostFrame>>();
                     if (tapeRes) {
                         m_fields->m_normalGhostTape = tapeRes.unwrap();
-                        
-                        // Instantiate Normal Ghost Visuals (Cyan)
-                        m_fields->m_normalGhostSprite = CCSprite::createWithSpriteFrameName("player_01_001.png");
-                        if (m_fields->m_normalGhostSprite) {
-                            m_fields->m_normalGhostSprite->setColor({0, 255, 255});
-                            m_fields->m_normalGhostSprite->setOpacity(120);
-                            m_fields->m_normalGhostSprite->setVisible(false);
-                            if (m_objectLayer) {
-                                m_objectLayer->addChild(m_fields->m_normalGhostSprite, 100);
-                            }
+                        m_fields->m_normalGhostSprite = createGhostVisual({0, 255, 255}, 130); // Cyan
+                        if (m_fields->m_normalGhostSprite && m_objectLayer) {
+                            m_objectLayer->addChild(m_fields->m_normalGhostSprite, 1000); // Higher Z-Order
                         }
                     }
                 }
-            } catch (...) {
-                log::error("Failed to parse normal ghost tape data.");
-            }
+            } catch (...) {}
         }
 
         // 2. Load the Coin Ghost Track
@@ -111,22 +117,13 @@ struct $modify(MyPlayLayer, PlayLayer) {
                     auto tapeRes = parseResult.unwrap().as<std::vector<GhostFrame>>();
                     if (tapeRes) {
                         m_fields->m_coinGhostTape = tapeRes.unwrap();
-                        
-                        // Instantiate Coin Ghost Visuals (Gold/Yellow)
-                        m_fields->m_coinGhostSprite = CCSprite::createWithSpriteFrameName("player_01_001.png");
-                        if (m_fields->m_coinGhostSprite) {
-                            m_fields->m_coinGhostSprite->setColor({255, 215, 0});
-                            m_fields->m_coinGhostSprite->setOpacity(150);
-                            m_fields->m_coinGhostSprite->setVisible(false);
-                            if (m_objectLayer) {
-                                m_objectLayer->addChild(m_fields->m_coinGhostSprite, 100);
-                            }
+                        m_fields->m_coinGhostSprite = createGhostVisual({255, 215, 0}, 160); // Gold
+                        if (m_fields->m_coinGhostSprite && m_objectLayer) {
+                            m_objectLayer->addChild(m_fields->m_coinGhostSprite, 1000);
                         }
                     }
                 }
-            } catch (...) {
-                log::error("Failed to parse coin ghost tape data.");
-            }
+            } catch (...) {}
         }
 
         return true;
@@ -135,13 +132,25 @@ struct $modify(MyPlayLayer, PlayLayer) {
     void update(float dt) {
         PlayLayer::update(dt);
 
-        // Don't record or manipulate visuals if the player object doesn't exist or is dead
         if (!m_player1 || m_player1->m_isDead) return;
 
-        // Use the current size of the recording vector as our sync clock frame index
+        // CRITICAL UPDATE: Detects finish line cross instantly in BOTH Normal & Practice mode
+        if (m_player1->getPositionX() >= m_levelLength && !m_fields->m_hasSavedThisRun) {
+            m_fields->m_hasSavedThisRun = true;
+            if (!m_fields->m_currentRecording.empty()) {
+                // Practice runs can never collect coins, so force normal-route sorting
+                bool isCoinRun = !m_isPracticeMode && m_fields->m_collectedCoinThisRun;
+                auto path = getGhostPath(m_fields->m_levelID, isCoinRun);
+                
+                matjson::Value json = m_fields->m_currentRecording;
+                std::ofstream file(path);
+                file << json.dump();
+            }
+        }
+
         size_t currentIndex = m_fields->m_currentRecording.size();
 
-        // Record the player's real-time kinematics
+        // Record player kinematics
         GhostFrame frame;
         frame.position = m_player1->getPosition();
         frame.rotation = m_player1->getRotation();
@@ -173,8 +182,8 @@ struct $modify(MyPlayLayer, PlayLayer) {
 
     void resetLevel() {
         PlayLayer::resetLevel();
+        m_fields->m_hasSavedThisRun = false;
         
-        // Clean up data for fresh non-practice runs or runs with no active checkpoints
         if (!m_isPracticeMode || m_fields->m_practiceCheckpoints.empty()) {
             m_fields->m_currentRecording.clear();
             m_fields->m_collectedCoinThisRun = false;
@@ -183,12 +192,10 @@ struct $modify(MyPlayLayer, PlayLayer) {
 
     void createCheckpoint() {
         PlayLayer::createCheckpoint();
-        
         if (m_checkpointArray && m_checkpointArray->count() > 0) {
             auto checkpoint = static_cast<CheckpointObject*>(m_checkpointArray->lastObject());
             if (checkpoint) {
                 size_t frameIndex = m_fields->m_currentRecording.size();
-                // Take a snapshot of the tape index and coin state at this point
                 m_fields->m_practiceCheckpoints[checkpoint] = { frameIndex, m_fields->m_collectedCoinThisRun };
             }
         }
@@ -196,15 +203,11 @@ struct $modify(MyPlayLayer, PlayLayer) {
 
     void loadFromCheckpoint(CheckpointObject* object) {
         PlayLayer::loadFromCheckpoint(object);
-        
         if (object && m_fields->m_practiceCheckpoints.contains(object)) {
             auto const& [frameIndex, coinFlag] = m_fields->m_practiceCheckpoints[object];
-            
-            // Splice out any corrupted frames recorded past this checkpoint
             if (frameIndex <= m_fields->m_currentRecording.size()) {
                 m_fields->m_currentRecording.resize(frameIndex);
             }
-            // Revert coin state back to what it was when checkpoint was saved
             m_fields->m_collectedCoinThisRun = coinFlag;
         }
     }
@@ -221,27 +224,11 @@ struct $modify(MyPlayLayer, PlayLayer) {
 
     void destroyObject(GameObject* obj) {
         PlayLayer::destroyObject(obj);
-        
         if (obj) {
             int type = static_cast<int>(obj->m_objectType);
-            // 22 handles Normal Secret Coins, 37 handles Custom/User Coins
             if (type == 22 || type == 37) {
                 m_fields->m_collectedCoinThisRun = true;
             }
-        }
-    }
-
-    void levelComplete() {
-        PlayLayer::levelComplete();
-        
-        // Persist tape files locally upon a legitimate complete run
-        if (!m_fields->m_currentRecording.empty()) {
-            bool isCoinRun = m_fields->m_collectedCoinThisRun;
-            auto path = getGhostPath(m_fields->m_levelID, isCoinRun);
-            
-            matjson::Value json = m_fields->m_currentRecording;
-            std::ofstream file(path);
-            file << json.dump();
         }
     }
 };
