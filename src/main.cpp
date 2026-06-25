@@ -9,6 +9,7 @@
 #include <string>
 #include <algorithm>
 #include <unordered_map>
+#include <chrono> // 🔒 Safe fallback for cross-platform timestamping
 
 using namespace geode::prelude;
 
@@ -204,7 +205,6 @@ public:
     bool init() override {
         float width = 320.f;
         float height = 160.f;
-        // 🛠️ Fixed 9-argument layout configuration
         if (!FLAlertLayer::init(this, m_isRenameMode ? "Rename Route" : "Save Route", "", "Cancel", "Confirm", width, false, height, 1.f)) return false;
 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
@@ -242,7 +242,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         auto ghostSprite = SimplePlayer::create(playerFrame);
         if (ghostSprite) {
             ghostSprite->setColor(routeColor);
-            // 🛠️ Fixed Color ID mismatch using colorForIdx
             ghostSprite->setSecondColor(GameManager::sharedState()->colorForIdx(GameManager::sharedState()->getPlayerColor2()));
             ghostSprite->setOpacity(130);
             ghostSprite->setVisible(false);
@@ -303,7 +302,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         return true;
     }
 
-    // 🛠️ Modified signature and removed 'override' keyword from Geode macro structures
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         PlayLayer::processCommands(dt, isHalfTick, isLastTick);
         if (!m_player1) return;
@@ -330,7 +328,8 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             }
         }
 
-        if (GhostManager::get()->isRecording() && m_glInPracticeMode) {
+        // 🛠️ FIXED: Swapped to Geode 5.x standard m_isPracticeMode variable
+        if (GhostManager::get()->isRecording() && m_isPracticeMode) {
             GhostManager::get()->getRecordingBuffer().push_back({
                 m_fields->m_physicsTicks,
                 m_player1->getPositionX(),
@@ -407,17 +406,13 @@ struct $modify(GhostPlayLayer, PlayLayer) {
 
     void playEndAnimationToPos(cocos2d::CCPoint pos) {
         PlayLayer::playEndAnimationToPos(pos);
-        if (m_glInPracticeMode) this->executeUnifiedSaveFlow();
+        // 🛠️ FIXED: Swapped to standard m_isPracticeMode
+        if (m_isPracticeMode) this->executeUnifiedSaveFlow();
     }
 
     void levelComplete() {
         PlayLayer::levelComplete();
         this->executeUnifiedSaveFlow();
-    }
-
-    void onQuit() {
-        GhostManager::get()->clearVolatileBuffers();
-        PlayLayer::onQuit();
     }
 
     void createCheckpoint() {
@@ -426,7 +421,8 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 
     void removeLastCheckpoint() {
-        PlayLayer::removeLastCheckpoint();
+        // 🛠️ FIXED: Checkpoint storage hooks called via GJBaseGameLayer parent logic in 2.2
+        GJBaseGameLayer::removeLastCheckpoint();
         if (!m_fields->m_checkpointTicks.empty()) m_fields->m_checkpointTicks.pop_back();
     }
 };
@@ -441,7 +437,11 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     auto dir = Mod::get()->getSaveDir() / std::to_string(levelID);
     std::filesystem::create_directories(dir);
 
-    std::string filename = "ghost_" + std::to_string(geode::utils::time::getMillis()) + ".json";
+    // 🛠️ FIXED: Swapped geode::utils::time out for standard library high-precision chrono clock parameters
+    auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    ).count();
+    std::string filename = "ghost_" + std::to_string(timestamp) + ".json";
     auto macroPath = dir / filename;
 
     auto framesArr = matjson::Value::array();
@@ -496,7 +496,8 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer*, bool btn2) {
             commitGhostToDiskAndMemory(m_levelID, textResult);
         }
     }
-    this->onClose(nullptr);
+    // 🛠️ FIXED: Dismiss panel via standard Cocos alert virtual sequence
+    this->keyBackClicked();
 }
 
 // ==========================================
@@ -520,9 +521,4 @@ public:
     }
 
     bool init() override {
-        if (!FLAlertLayer::init(this, "Ghost Manager", "Close", nullptr, nullptr, 380.f, false, 250.f, 1.f)) return false;
-
-        auto winSize = CCDirector::sharedDirector()->getWinSize();
-        m_listMenu = CCMenu::create();
-        m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
-        m_mainLayer->a
+        if (!FLAlertLayer::ini
