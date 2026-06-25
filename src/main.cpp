@@ -495,7 +495,7 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer*, bool btn2) {
 // ==========================================
 // 🎛️ SYSTEM DASHBOARD POPUP INTERFACE
 // ==========================================
-class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol, public ColorPickPopupDelegate {
+class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol, public ColorPickerDelegate {
 private:
     int m_levelID;
     CCMenu* m_listMenu = nullptr;
@@ -513,7 +513,7 @@ public:
         return nullptr;
     }
 
-    void updateColor(cocos2d::ccColor3B color) override {
+    void updateColorValue(cocos2d::ccColor3B color) {
         auto& ghostsRef = GhostManager::get()->getActiveGhosts();
         if (m_colorEditIdx < ghostsRef.size()) {
             ghostsRef[m_colorEditIdx].color = color;
@@ -524,6 +524,11 @@ public:
             }
             this->refreshGhostListUI();
         }
+    }
+
+    // ColorPickerDelegate implementation
+    void colorValueChanged(cocos2d::ccColor3B color) override {
+        this->updateColorValue(color);
     }
 
     void refreshGhostListUI() {
@@ -632,12 +637,8 @@ public:
         if (idx >= ghosts.size()) return;
 
         m_colorEditIdx = idx;
-        
-        auto popup = ColorPickPopup::create(ghosts[idx].color);
-        if (popup) {
-            popup->setDelegate(this);
-            popup->show();
-        }
+        auto popup = ColorPickPopup::create(this, ghosts[idx].color);
+        popup->show();
     }
 
     void onRenameProfileRoute(CCObject* sender) {
@@ -719,7 +720,7 @@ struct $modify(MyPauseLayer, PauseLayer) {
         if (auto pl = PlayLayer::get()) {
             auto dialog = GhostNameDialog::create(pl->m_level->m_levelID, false);
             dialog->show();
-            this->onUnpause(nullptr);
+            this->keyBackClicked();
         }
     }
 };
