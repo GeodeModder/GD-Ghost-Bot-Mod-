@@ -424,7 +424,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 };
 
-// ==========================================
+ // ==========================================
 // 💬 POST-DIALOG DECLARATION ATTACHMENTS
 // ==========================================
 void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
@@ -541,72 +541,81 @@ public:
             auto& ghost = ghosts[i];
 
             auto colorSprite = CCSprite::createWithSpriteFrameName("GJ_colorBtn_001.png");
-            colorSprite->setColor(ghost.color);
-            colorSprite->setScale(0.6f);
-            
-            auto colBtn = CCMenuItemSpriteExtra::create(colorSprite, this, menu_selector(GhostPopup::onSelectColorPalette));
-            colBtn->setTag(static_cast<int>(i));
-            colBtn->setPosition({-150.f, yOffset});
-            m_listMenu->addChild(colBtn);
+            if (colorSprite) {
+                colorSprite->setColor(ghost.color);
+                colorSprite->setScale(0.6f);
+                auto colBtn = CCMenuItemSpriteExtra::create(colorSprite, this, menu_selector(GhostPopup::onSelectColorPalette));
+                colBtn->setTag(static_cast<int>(i));
+                colBtn->setPosition({-150.f, yOffset});
+                m_listMenu->addChild(colBtn);
+            }
 
-            auto toggleBtn = CCMenuItemToggler::createWithStandardSprites(
-                this, menu_selector(GhostPopup::onToggleGhostVisibility), 0.6f
-            );
-            toggleBtn->toggle(ghost.isEnabled);
-            toggleBtn->setTag(static_cast<int>(i));
-            toggleBtn->setPosition({-110.f, yOffset});
-            m_listMenu->addChild(toggleBtn);
+            // FIXED: Using concrete texture wrappers instead of unstable standard macro toggles
+            auto onSprite = CCSprite::createWithSpriteFrameName("GJ_checkOnBtn_001.png");
+            auto offSprite = CCSprite::createWithSpriteFrameName("GJ_checkOffBtn_001.png");
+            if (onSprite && offSprite) {
+                onSprite->setScale(0.6f);
+                offSprite->setScale(0.6f);
+                auto toggleBtn = CCMenuItemToggler::create(offSprite, onSprite, this, menu_selector(GhostPopup::onToggleGhostVisibility));
+                toggleBtn->toggle(ghost.isEnabled);
+                toggleBtn->setTag(static_cast<int>(i));
+                toggleBtn->setPosition({-110.f, yOffset});
+                m_listMenu->addChild(toggleBtn);
+            }
 
             auto label = CCLabelBMFont::create(ghost.name.c_str(), "bigFont.fnt");
-            label->setScale(0.4f);
-            label->setAnchorPoint({0.f, 0.5f});
-            label->setPosition({-85.f, yOffset});
-            if (!ghost.isEnabled) label->setOpacity(90);
-            m_listMenu->addChild(label);
+            if (label) {
+                label->setScale(0.4f);
+                label->setAnchorPoint({0.f, 0.5f});
+                label->setPosition({-85.f, yOffset});
+                if (!ghost.isEnabled) label->setOpacity(90);
+                m_listMenu->addChild(label);
+            }
 
             auto editSprite = CCSprite::createWithSpriteFrameName("GJ_editBtn_001.png");
-            editSprite->setScale(0.55f);
-            
-            auto editBtn = CCMenuItemSpriteExtra::create(editSprite, this, menu_selector(GhostPopup::onRenameProfileRoute));
-            editBtn->setTag(static_cast<int>(i));
-            editBtn->setPosition({110.f, yOffset});
-            m_listMenu->addChild(editBtn);
+            if (editSprite) {
+                editSprite->setScale(0.55f);
+                auto editBtn = CCMenuItemSpriteExtra::create(editSprite, this, menu_selector(GhostPopup::onRenameProfileRoute));
+                editBtn->setTag(static_cast<int>(i));
+                editBtn->setPosition({110.f, yOffset});
+                m_listMenu->addChild(editBtn);
+            }
 
             auto delSprite = CCSprite::createWithSpriteFrameName("GJ_trashBtn_001.png");
-            delSprite->setScale(0.55f);
-            
-            auto delBtn = CCMenuItemSpriteExtra::create(delSprite, this, menu_selector(GhostPopup::onDeleteProfileRecord));
-            delBtn->setTag(static_cast<int>(i));
-            delBtn->setPosition({145.f, yOffset});
-            m_listMenu->addChild(delBtn);
+            if (delSprite) {
+                delSprite->setScale(0.55f);
+                auto delBtn = CCMenuItemSpriteExtra::create(delSprite, this, menu_selector(GhostPopup::onDeleteProfileRecord));
+                delBtn->setTag(static_cast<int>(i));
+                delBtn->setPosition({145.f, yOffset});
+                m_listMenu->addChild(delBtn);
+            }
 
             yOffset -= 35.f;
         }
     }
 
     bool init() override {
-        if (!FLAlertLayer::init(this, "Ghost Manager", "Close", nullptr, nullptr, 380.f, false, 250.f, 1.f)) return false;
-
-        log::info("GhostPopup: init start");
+        // FIXED: Repositioned parameters so "Close" acts as a solid button entity natively
+        if (!FLAlertLayer::init(this, "Ghost Manager", "", "Close", nullptr, 380.f, false, 250.f, 1.f)) return false;
 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
         m_listMenu = CCMenu::create();
         m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
         m_mainLayer->addChild(m_listMenu);
 
-        // Temporarily disabled via comments to isolate list item crashes
-        // this->refreshGhostListUI();
+        // UNCOMMENTED: The list UI is officially active and armed!
+        this->refreshGhostListUI();
 
         auto bottomMenu = CCMenu::create();
         bottomMenu->setPosition({winSize.width / 2, winSize.height / 2 - 95.f});
         m_mainLayer->addChild(bottomMenu);
 
         auto recBtnSprite = ButtonSprite::create("Record New Route", "goldFont.fnt", "GJ_button_01.png");
-        
-        auto recBtn = CCMenuItemSpriteExtra::create(recBtnSprite, this, menu_selector(GhostPopup::onInitiateRecordAction));
-        bottomMenu->addChild(recBtn);
+        if (recBtnSprite) {
+            auto recBtn = CCMenuItemSpriteExtra::create(recBtnSprite, this, menu_selector(GhostPopup::onInitiateRecordAction));
+            bottomMenu->addChild(recBtn);
+        }
 
-        log::info("GhostPopup: init complete");
         return true;
     }
 
@@ -616,7 +625,8 @@ public:
         auto& ghosts = GhostManager::get()->getActiveGhosts();
         if (idx >= ghosts.size()) return;
 
-        ghosts[idx].isEnabled = toggler->isToggled(); 
+        // Invert current state safely
+        ghosts[idx].isEnabled = !ghosts[idx].isEnabled; 
         GhostManager::get()->saveMetadataFile(m_levelID);
 
         if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
@@ -700,11 +710,14 @@ struct $modify(MyPauseLayer, PauseLayer) {
         auto winSize = CCDirector::sharedDirector()->getWinSize();
 
         if (menu) {
+            // FIXED: Cleaned up hallucinated asset delegate class
             auto managerBtnSprite = CCSprite::createWithSpriteFrameName("GJ_downloadsIcon_001.png");
             
-            auto managerBtn = CCMenuItemSpriteExtra::create(managerBtnSprite, this, menu_selector(MyPauseLayer::onOpenGhostConfigPanel));
-            menu->addChild(managerBtn);
-            menu->updateLayout();
+            if (managerBtnSprite) {
+                auto managerBtn = CCMenuItemSpriteExtra::create(managerBtnSprite, this, menu_selector(MyPauseLayer::onOpenGhostConfigPanel));
+                menu->addChild(managerBtn);
+                menu->updateLayout();
+            }
         }
 
         if (GhostManager::get()->isRecording() && !GhostManager::get()->getRecordingBuffer().empty()) {
@@ -714,17 +727,17 @@ struct $modify(MyPauseLayer, PauseLayer) {
 
             auto saveBtnSprite = ButtonSprite::create("Finish & Save Route", "goldFont.fnt", "GJ_button_02.png");
             
-            auto saveBtn = CCMenuItemSpriteExtra::create(saveBtnSprite, this, menu_selector(MyPauseLayer::onManualSaveOverrideAction));
-            manualSaveMenu->addChild(saveBtn);
+            if (saveBtnSprite) {
+                auto saveBtn = CCMenuItemSpriteExtra::create(saveBtnSprite, this, menu_selector(MyPauseLayer::onManualSaveOverrideAction));
+                manualSaveMenu->addChild(saveBtn);
+            }
         }
     }
 
-    // ISOLATION TRIGGER: Swapped to a direct message toast to verify button connectivity instantly
     void onOpenGhostConfigPanel(CCObject*) {
-        Notification::create(
-            "Button callback works", 
-            NotificationIcon::Success
-        )->show();
+        if (auto pl = PlayLayer::get()) {
+            GhostPopup::open(pl->m_level->m_levelID);
+        }
     }
 
     void onManualSaveOverrideAction(CCObject*) {
