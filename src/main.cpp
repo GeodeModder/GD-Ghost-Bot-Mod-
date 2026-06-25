@@ -176,7 +176,6 @@ public:
         }
     }
 };
-
 // ==========================================
 // 💬 DIALOG INTERFACE POPUPS
 // ==========================================
@@ -291,7 +290,138 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 
     bool init(GJGameLevel* level, bool usePractice, bool isPlatformer) {
-        if (!PlayLayer::init(level, usePractice, is
+        if (!PlayLayer::init(level, usePractice, isPlatformer)) return false;
+
+        m_fields->m_checkpointTicks.clear();
+        m_fields->m_physicsTicks = 0;
+        m_fields->m_wasDeadLastFrame = false;
+        m_fields->m_saveFlowTriggered = false; 
+
+        GhostManager::get()->loadMacroFramework(level->m_levelID);
+        initializeRenderPool();
+        return true;
+    }
+
+    void processCommands(float dt, bool isHalfTick, bool isLastTick) {
+        PlayLayer::processCommands(dt, isHalfTick, isLastTick);
+        if (!m_player1) return;
+
+        if (m_player1->m_isDead) {
+            m_fields->m_wasDeadLastFrame = true;
+            return;
+        }
+
+        if (m_fields->m_wasDeadLastFrame && !m_player1->m_isDead) {
+            m_fields->m_wasDeadLastFrame = false;
+            if (!m_fields->m_checkpointTicks.empty()) {
+                m_fields->m_physicsTicks = m_fields->m_checkpointTicks.back(); 
+                
+                if (GhostManager::get()->isRecording()) {
+                    auto& buffer = GhostManager::get()->getRecordingBuffer();
+                    buffer.erase(std::remove_if(buffer.begin(), buffer.end(), [this](GhostFrame const& f) {
+                        return f.tick > m_fields->m_physicsTicks;
+                    }), buffer.end());
+                }
+            } else {
+                m_fields->m_physicsTicks = 0;
+                if (GhostManager::get()->isRecording()) GhostManager::get()->getRecordingBuffer().clear();
+            }
+        }
+
+        if (GhostManager::get()->isRecording()) {
+            GhostManager::get()->getRecordingBuffer().push_back({
+                m_fields->m_physicsTicks,
+                m_player1->getPositionX(),
+                m_player1->getPositionY(),
+                m_player1->getRotation()
+            });
+        }
+
+        m_fields->m_physicsTicks++;
+    }
+
+    void update(float dt) {
+        PlayLayer::update(dt);
+        if (!m_player1 || m_player1->m_isDead) return;
+
+        auto& routes = GhostManager::get()->getActiveGhosts();
+        for (auto const& ghostData : routes) {
+            if (!ghostData.isEnabled || ghostData.frames.empty()) continue;
+
+            auto it = m_fields->m_ghostSprites.find(ghostData.filename);
+            if (it == m_fields->m_ghostSprites.end() || !it->second) continue;
+            auto ghostSprite = it->second;
+
+            uint32_t targetTick = m_fields->m_physicsTicks + ghostData.lookAheadTicks;
+            
+            auto itb = std::lower_bound(ghostData.frames.begin(), ghostData.frames.end(), targetTick, [](GhostFrame const& frame, uint32_t target) {
+                return frame.tick < target;
+            });
+
+            if (itb != ghostData.frames.end() && itb != ghostData.frames.begin()) {
+                auto ita = itb - 1;
+                
+                float tickDelta = static_cast<float>(itb->tick - ita->tick);
+                float pct = (tickDelta > 0.f) ? static_cast<float>(targetTick - ita->tick) / tickDelta : 0.f;
+
+                float lerpedX = ita->x + pct * (itb->x - ita->x);
+                float lerpedY = ita->y + pct * (itb->y - ita->y);
+
+                float diff = itb->rot - ita->rot;
+                while (diff < -180.f) diff += 360.f;
+                while (diff > 180.f) diff -= 360.f;
+                float lerpedRot = ita->rot + pct * diff;
+
+                ghostSprite->setVisible(true);
+                ghostSprite->setPosition({lerpedX, lerpedY});
+                ghostSprite->setRotation(lerpedRot);
+            } else if (itb == ghostData.frames.end() && !ghostData.frames.empty()) {
+                auto const& lastFrame = ghostData.frames.back();
+                ghostSprite->setVisible(true);
+                ghostSprite->setPosition({lastFrame.x, lastFrame.y});
+                ghostSprite->setRotation(lastFrame.rot);
+            } else {
+                ghostSprite->setVisible(false);
+            }
+        }
+    }
+
+    void registerDynamicRecordSprite(std::string const& filename, ccColor3B color) {
+        auto sprite = createGhostSprite(color);
+        if (sprite) {
+            sprite->setVisible(true);
+            m_fields->m_ghostSprites[filename] = sprite;
+        }
+    }
+
+    void executeUnifiedSaveFlow() {
+        if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
+            m_fields->m_saveFlowTriggered = true; 
+            auto popup = GhostNameDialog::create(m_level->m_levelID, false);
+            if (popup) popup->show();
+        }
+    }
+
+    void playEndAnimationToPos(cocos2d::CCPoint pos) {
+        PlayLayer::playEndAnimationToPos(pos);
+        this->executeUnifiedSaveFlow();
+    }
+
+    void levelComplete() {
+        PlayLayer::levelComplete();
+        this->executeUnifiedSaveFlow();
+    }
+
+    void createCheckpoint() {
+        PlayLayer::createCheckpoint();
+        m_fields->m_checkpointTicks.push_back(m_fields->m_physicsTicks);
+    }
+
+    void removeCheckpoint(bool first) {
+        PlayLayer::removeCheckpoint(first);
+        if (!m_fields->m_checkpointTicks.empty()) m_fields->m_checkpointTicks.pop_back();
+    }
+};
 // ==========================================
 // 💬 POST-DIALOG DECLARATION ATTACHMENTS
 // ==========================================
@@ -587,7 +717,7 @@ struct $modify(MyPauseLayer, PauseLayer) {
         }
     }
 
-    // ISOLATION TRIGGER: Swapped to an direct message toast to verify button connectivity instantly
+    // ISOLATION TRIGGER: Swapped to a direct message toast to verify button connectivity instantly
     void onOpenGhostConfigPanel(CCObject*) {
         Notification::create(
             "Button callback works", 
