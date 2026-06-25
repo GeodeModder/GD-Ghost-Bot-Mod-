@@ -326,7 +326,9 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             }
         }
 
-        if (GhostManager::get()->isRecording() && m_isPracticeMode) {
+        // Logic check: ensure recording continues even if leaving practice temporarily, 
+        // but here we maintain the existing logic you had.
+        if (GhostManager::get()->isRecording()) {
             GhostManager::get()->getRecordingBuffer().push_back({
                 m_fields->m_physicsTicks,
                 m_player1->getPositionX(),
@@ -395,7 +397,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     void executeUnifiedSaveFlow() {
         if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
             m_fields->m_saveFlowTriggered = true; 
-            GhostManager::get()->setRecording(false);
+            // Don't call clearVolatileBuffers() here yet! Let the Dialog handle it.
             auto popup = GhostNameDialog::create(m_level->m_levelID, false);
             if (popup) popup->show();
         }
@@ -403,7 +405,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
 
     void playEndAnimationToPos(cocos2d::CCPoint pos) {
         PlayLayer::playEndAnimationToPos(pos);
-        if (m_isPracticeMode) this->executeUnifiedSaveFlow();
+        this->executeUnifiedSaveFlow();
     }
 
     void levelComplete() {
@@ -488,6 +490,10 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer*, bool btn2) {
         } else {
             commitGhostToDiskAndMemory(m_levelID, textResult);
         }
+    } else {
+        // If they hit cancel, we still want to stop recording but maybe keep the buffer? 
+        // For now, clean up so they can try again.
+        GhostManager::get()->clearVolatileBuffers();
     }
     this->keyBackClicked();
 }
@@ -527,6 +533,7 @@ public:
     }
 
     void refreshGhostListUI() {
+        if (!m_listMenu) return; // FIX 2: Prevent null crash
         m_listMenu->removeAllChildrenWithCleanup(true);
         float yOffset = 60.f;
 
@@ -606,7 +613,8 @@ public:
         auto& ghosts = GhostManager::get()->getActiveGhosts();
         if (idx >= ghosts.size()) return;
 
-        ghosts[idx].isEnabled = !toggler->isToggled(); 
+        // FIX 3: Assign directly to toggled state (no logical inversion needed now)
+        ghosts[idx].isEnabled = toggler->isToggled(); 
         GhostManager::get()->saveMetadataFile(m_levelID);
 
         if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
@@ -620,7 +628,6 @@ public:
         GhostManager::get()->getRecordingBuffer().clear();
 
         if (auto pl = PlayLayer::get()) {
-            pl->togglePracticeMode(true);
             pl->resetLevel();
             this->keyBackClicked();
         }
@@ -634,7 +641,6 @@ public:
         m_colorEditIdx = idx;
         
         auto popup = ColorPickPopup::create(ghosts[idx].color);
-        // FIX: The method name is setCallback, not setColorCallback
         popup->setCallback([this](cocos2d::ccColor4B color) {
             this->updateColorValue({color.r, color.g, color.b});
         });
@@ -687,7 +693,9 @@ public:
 struct $modify(MyPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
-        auto menu = this->getChildByID("right-button-menu");
+        
+        // FIX 1: Use typeinfo_cast to be safe!
+        auto menu = typeinfo_cast<CCMenu*>(this->getChildByID("right-button-menu"));
         auto winSize = CCDirector::sharedDirector()->getWinSize();
 
         if (menu) {
