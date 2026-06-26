@@ -177,11 +177,14 @@ public:
 
 // ---------------------------------------------------------------------------
 // GhostNameDialog
-// Fix (Bug 2): No longer passes `this` as the FLAlertLayerProtocol delegate.
-// Buttons are built manually with explicit callbacks, breaking the self-retain
-// cycle that previously left a zombie node in the scene after dismissal.
+// Fix (Bug 2): The original code passed `this` as the FLAlertLayerProtocol
+// delegate, making the layer retain itself and preventing deallocation after
+// dismissal (zombie node that intercepted touches). Fix: we still pass `this`
+// so FLAlertLayer can call FLAlert_Clicked (needed to drive its own button
+// logic), but we null out m_alertProtocol at the very start of FLAlert_Clicked
+// to break the cycle before the callback returns and FLAlertLayer dismisses.
 // ---------------------------------------------------------------------------
-class GhostNameDialog : public FLAlertLayer {
+class GhostNameDialog : public FLAlertLayer, public FLAlertLayerProtocol {
 protected:
     int m_levelID;
     bool m_isRenameMode;
@@ -202,8 +205,7 @@ public:
         return nullptr;
     }
 
-    void onConfirm(CCObject*);
-    void onCancel(CCObject*);
+    void FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) override;
 };
 
 struct $modify(GhostPlayLayer, PlayLayer) {
@@ -449,9 +451,10 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
 // GhostNameDialog implementation
 // ---------------------------------------------------------------------------
 bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex, GhostPopup* parentPopup) {
-    // Fix (Bug 2): Pass nullptr as the protocol delegate — no self-retain cycle.
-    // Buttons are wired to onConfirm/onCancel via menu_selector instead.
-    if (!FLAlertLayer::init(nullptr, isRenameMode ? "Rename Route" : "Save Route", "", nullptr, nullptr, 320.f, false, 140.f, 0.8f)) {
+    // Pass `this` as delegate so FLAlertLayer creates its Cancel/Confirm buttons
+    // normally — passing nullptr for the button strings was causing the crash
+    // because GD dereferences them unconditionally to build button sprites.
+    if (!FLAlertLayer::init(this, isRenameMode ? "Rename Route" : "Save Route", "", "Cancel", "Confirm", 320.f, false, 140.f, 0.8f)) {
         return false;
     }
 
@@ -474,57 +477,40 @@ bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex, Gho
     }
     m_mainLayer->addChild(m_inputField);
 
-    // Build Cancel / Confirm buttons manually
-    auto btnMenu = CCMenu::create();
-    btnMenu->setPosition({ boxSize.width / 2, 20.f });
-    m_mainLayer->addChild(btnMenu);
-
-    auto cancelSpr = ButtonSprite::create("Cancel", "goldFont.fnt", "GJ_button_06.png");
-    auto cancelBtn = CCMenuItemSpriteExtra::create(cancelSpr, this, menu_selector(GhostNameDialog::onCancel));
-    cancelBtn->setPosition({ -60.f, 0.f });
-    btnMenu->addChild(cancelBtn);
-
-    auto confirmSpr = ButtonSprite::create("Confirm", "goldFont.fnt", "GJ_button_01.png");
-    auto confirmBtn = CCMenuItemSpriteExtra::create(confirmSpr, this, menu_selector(GhostNameDialog::onConfirm));
-    confirmBtn->setPosition({ 60.f, 0.f });
-    btnMenu->addChild(confirmBtn);
-
     return true;
 }
 
-void GhostNameDialog::onConfirm(CCObject*) {
-    std::string textResult = m_inputField->getString();
-    if (textResult.empty()) textResult = m_isRenameMode ? "Unnamed Route" : "New Route";
+void GhostNameDialog::FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) {
+    // Fix (Bug 2): Break the self-retain cycle immediately. FLAlertLayer holds
+    // a retained reference to its delegate (m_alertProtocol). Since `this` IS
+    // that delegate, nulling it here drops the extra retain count before the
+    // layer tries to dismiss itself, so it can actually be deallocated.
+    m_alertProtocol = nullptr;
 
-    if (m_isRenameMode) {
-        if (m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
-            auto& targets = GhostManager::get()->getActiveGhosts();
-            targets[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult, targets[m_editIndex].filename);
-            GhostManager::get()->saveMetadataFile(m_levelID);
+    if (secondButton) { // Confirm
+        std::string textResult = m_inputField->getString();
+        if (textResult.empty()) textResult = m_isRenameMode ? "Unnamed Route" : "New Route";
+
+        if (m_isRenameMode) {
+            if (m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
+                auto& targets = GhostManager::get()->getActiveGhosts();
+                targets[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult, targets[m_editIndex].filename);
+                GhostManager::get()->saveMetadataFile(m_levelID);
+            }
+        } else {
+            commitGhostToDiskAndMemory(m_levelID, textResult);
         }
-    } else {
-        commitGhostToDiskAndMemory(m_levelID, textResult);
-    }
-
-    this->keyBackClicked();
-}
-
-void GhostNameDialog::onCancel(CCObject*) {
-    // Fix (Bug 2 + original Bug 2): Explicitly clean up recording state and
-    // dismiss. The old FLAlert_Clicked path left state in limbo because the
-    // self-retain cycle prevented the dialog from being fully released, leaving
-    // a zombie that intercepted subsequent touches.
-    if (!m_isRenameMode) {
-        if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
-            // Reset the save-flow flag so a future completion can re-trigger it
-            pl->m_fields->m_saveFlowTriggered = false;
+    } else { // Cancel
+        if (!m_isRenameMode) {
+            if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
+                pl->m_fields->m_saveFlowTriggered = false;
+            }
+            // Level is complete and update() is no longer running, so the
+            // buffer can't accumulate more frames. Clear it cleanly.
+            GhostManager::get()->clearVolatileBuffers();
         }
-        // Clear recording entirely on cancel — the run is over and the buffer
-        // cannot be re-used (level complete, update() no longer running).
-        GhostManager::get()->clearVolatileBuffers();
     }
-
-    this->keyBackClicked();
+    // FLAlertLayer calls keyBackClicked() automatically after this returns.
 }
 
 // ---------------------------------------------------------------------------
