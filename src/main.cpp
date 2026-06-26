@@ -175,13 +175,19 @@ public:
     }
 };
 
-class GhostNameDialog : public FLAlertLayer, public FLAlertLayerProtocol {
+// ---------------------------------------------------------------------------
+// GhostNameDialog
+// Fix (Bug 2): No longer passes `this` as the FLAlertLayerProtocol delegate.
+// Buttons are built manually with explicit callbacks, breaking the self-retain
+// cycle that previously left a zombie node in the scene after dismissal.
+// ---------------------------------------------------------------------------
+class GhostNameDialog : public FLAlertLayer {
 protected:
     int m_levelID;
     bool m_isRenameMode;
     size_t m_editIndex;
     geode::TextInput* m_inputField = nullptr;
-    GhostPopup* m_parentPopup = nullptr; 
+    GhostPopup* m_parentPopup = nullptr;
 
     bool init(int levelID, bool isRenameMode, size_t editIndex, GhostPopup* parentPopup);
 
@@ -196,8 +202,10 @@ public:
         return nullptr;
     }
 
-    void FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) override;
+    void onConfirm(CCObject*);
+    void onCancel(CCObject*);
 };
+
 struct $modify(GhostPlayLayer, PlayLayer) {
     struct Fields {
         std::vector<uint32_t> m_checkpointTicks; 
@@ -256,22 +264,24 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         PlayLayer::update(dt);
         if (!m_player1) return;
 
-        // 🚨 LIVE UN-GUARDED DEBUG LOG (Fires every 60 frames to check state)
+        // Throttled debug log (fires every 60 frames)
         static int logThrottle = 0;
         if (logThrottle++ % 60 == 0) {
             log::info(
-                "Recording={}, Buffer={}",
+                "Recording={}, Buffer={}, SaveFlowTriggered={}",
                 GhostManager::get()->isRecording(),
-                GhostManager::get()->getRecordingBuffer().size()
+                GhostManager::get()->getRecordingBuffer().size(),
+                m_fields->m_saveFlowTriggered
             );
         }
 
-        // Handle player crash tracking
+        // Handle player death
         if (m_player1->m_isDead) {
             m_fields->m_wasDeadLastFrame = true;
             return;
         }
 
+        // Handle respawn after death — rewind recording to last checkpoint
         if (m_fields->m_wasDeadLastFrame && !m_player1->m_isDead) {
             m_fields->m_wasDeadLastFrame = false;
             if (!m_fields->m_checkpointTicks.empty()) {
@@ -289,7 +299,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             }
         }
 
-        // Capture engine sampling loop
+        // Record frame
         if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
             GhostManager::get()->getRecordingBuffer().push_back({
                 m_fields->m_physicsTicks,
@@ -299,7 +309,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             });
         }
 
-        // Render playback matrix
+        // Ghost playback
         auto& routes = GhostManager::get()->getActiveGhosts();
         for (auto const& ghostData : routes) {
             if (!ghostData.isEnabled || ghostData.frames.empty()) continue;
@@ -344,9 +354,14 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_physicsTicks++;
     }
 
+    // Fix (Bug 3): Only hook levelComplete — not playEndAnimationToPos.
+    // In GD 2.2081, PlayLayer::levelComplete internally calls
+    // playEndAnimationToPos, so hooking both caused executeUnifiedSaveFlow
+    // to fire twice, which also made it fire spuriously during level resets
+    // that internally trigger end-animation paths.
     void executeUnifiedSaveFlow() {
         if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
-            m_fields->m_saveFlowTriggered = true; 
+            m_fields->m_saveFlowTriggered = true;
 
             auto popup = GhostNameDialog::create(m_level->m_levelID, false);
             if (popup) {
@@ -355,15 +370,12 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    void playEndAnimationToPos(cocos2d::CCPoint pos) {
-        PlayLayer::playEndAnimationToPos(pos);
-        this->executeUnifiedSaveFlow();
-    }
-
     void levelComplete() {
         PlayLayer::levelComplete();
         this->executeUnifiedSaveFlow();
     }
+
+    // playEndAnimationToPos is intentionally NOT hooked (Bug 3 fix).
 
     void createCheckpoint() {
         PlayLayer::createCheckpoint();
@@ -433,8 +445,13 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     Notification::create("Route Saved Flawlessly!", NotificationIcon::Success)->show();
 }
 
+// ---------------------------------------------------------------------------
+// GhostNameDialog implementation
+// ---------------------------------------------------------------------------
 bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex, GhostPopup* parentPopup) {
-    if (!FLAlertLayer::init(this, isRenameMode ? "Rename Route" : "Save Route", "", "Cancel", "Confirm", 320.f, false, 140.f, 0.8f)) {
+    // Fix (Bug 2): Pass nullptr as the protocol delegate — no self-retain cycle.
+    // Buttons are wired to onConfirm/onCancel via menu_selector instead.
+    if (!FLAlertLayer::init(nullptr, isRenameMode ? "Rename Route" : "Save Route", "", nullptr, nullptr, 320.f, false, 140.f, 0.8f)) {
         return false;
     }
 
@@ -457,33 +474,62 @@ bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex, Gho
     }
     m_mainLayer->addChild(m_inputField);
 
+    // Build Cancel / Confirm buttons manually
+    auto btnMenu = CCMenu::create();
+    btnMenu->setPosition({ boxSize.width / 2, 20.f });
+    m_mainLayer->addChild(btnMenu);
+
+    auto cancelSpr = ButtonSprite::create("Cancel", "goldFont.fnt", "GJ_button_06.png");
+    auto cancelBtn = CCMenuItemSpriteExtra::create(cancelSpr, this, menu_selector(GhostNameDialog::onCancel));
+    cancelBtn->setPosition({ -60.f, 0.f });
+    btnMenu->addChild(cancelBtn);
+
+    auto confirmSpr = ButtonSprite::create("Confirm", "goldFont.fnt", "GJ_button_01.png");
+    auto confirmBtn = CCMenuItemSpriteExtra::create(confirmSpr, this, menu_selector(GhostNameDialog::onConfirm));
+    confirmBtn->setPosition({ 60.f, 0.f });
+    btnMenu->addChild(confirmBtn);
+
     return true;
 }
 
-void GhostNameDialog::FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) {
-    if (secondButton) { 
-        std::string textResult = m_inputField->getString();
-        if (textResult.empty()) textResult = m_isRenameMode ? "Unnamed Route" : "New Route";
+void GhostNameDialog::onConfirm(CCObject*) {
+    std::string textResult = m_inputField->getString();
+    if (textResult.empty()) textResult = m_isRenameMode ? "Unnamed Route" : "New Route";
 
-        if (m_isRenameMode) {
-            if (m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
-                auto& targets = GhostManager::get()->getActiveGhosts();
-                targets[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult, targets[m_editIndex].filename);
-                GhostManager::get()->saveMetadataFile(m_levelID);
-            }
-        } else {
-            commitGhostToDiskAndMemory(m_levelID, textResult);
+    if (m_isRenameMode) {
+        if (m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
+            auto& targets = GhostManager::get()->getActiveGhosts();
+            targets[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult, targets[m_editIndex].filename);
+            GhostManager::get()->saveMetadataFile(m_levelID);
         }
-    } else { 
-        if (!m_isRenameMode) {
-            if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
-                pl->m_fields->m_saveFlowTriggered = false;
-            } else {
-                GhostManager::get()->clearVolatileBuffers();
-            }
-        }
+    } else {
+        commitGhostToDiskAndMemory(m_levelID, textResult);
     }
+
+    this->keyBackClicked();
 }
+
+void GhostNameDialog::onCancel(CCObject*) {
+    // Fix (Bug 2 + original Bug 2): Explicitly clean up recording state and
+    // dismiss. The old FLAlert_Clicked path left state in limbo because the
+    // self-retain cycle prevented the dialog from being fully released, leaving
+    // a zombie that intercepted subsequent touches.
+    if (!m_isRenameMode) {
+        if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
+            // Reset the save-flow flag so a future completion can re-trigger it
+            pl->m_fields->m_saveFlowTriggered = false;
+        }
+        // Clear recording entirely on cancel — the run is over and the buffer
+        // cannot be re-used (level complete, update() no longer running).
+        GhostManager::get()->clearVolatileBuffers();
+    }
+
+    this->keyBackClicked();
+}
+
+// ---------------------------------------------------------------------------
+// GhostPopup
+// ---------------------------------------------------------------------------
 class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
 private:
     int m_levelID;
@@ -602,25 +648,40 @@ public:
     }
 
     void onInitiateRecordAction(CCObject*) {
-        if (auto pl = PlayLayer::get()) {
-            Notification::create("Recording Initialized!", NotificationIcon::Success)->show();
+        if (!PlayLayer::get()) return;
 
-            GhostManager::get()->setRecording(true);
-            GhostManager::get()->getRecordingBuffer().clear();
+        GhostManager::get()->setRecording(true);
+        GhostManager::get()->getRecordingBuffer().clear();
 
-            if (!pl->m_isPracticeMode) {
-                pl->togglePracticeMode(true);
-            }
+        // Fix (Bug 4): Dismiss GhostPopup BEFORE calling togglePracticeMode /
+        // resetLevel. In GD 2.2081, resetLevel dismisses the PauseLayer as a
+        // side effect, which would leave GhostPopup orphaned if we tried to
+        // call keyBackClicked() on it afterward (stale parent chain).
+        this->keyBackClicked();
 
-            if (auto gpl = static_cast<GhostPlayLayer*>(pl)) {
-                gpl->m_fields->m_saveFlowTriggered = false;
-                gpl->m_fields->m_physicsTicks = 0;
-                gpl->m_fields->m_checkpointTicks.clear();
-            }
+        // Grab a fresh pointer — PauseLayer may have been removed by keyBackClicked
+        auto pl = PlayLayer::get();
+        if (!pl) return;
 
-            pl->resetLevel();
-            this->keyBackClicked();
+        if (!pl->m_isPracticeMode) {
+            pl->togglePracticeMode(true);
+            // togglePracticeMode internally calls resetLevel in GD 2.2081,
+            // which can spuriously fire end-animation paths. We re-snap the
+            // fields AFTER the call so any false saveFlowTriggered is cleared.
         }
+
+        // Fix (Bug 1): Reset saveFlowTriggered AFTER togglePracticeMode (and
+        // its internal resetLevel), not before. This overwrites any spurious
+        // true value set by hooks that fired during the internal reset.
+        if (auto gpl = static_cast<GhostPlayLayer*>(pl)) {
+            gpl->m_fields->m_saveFlowTriggered = false;
+            gpl->m_fields->m_physicsTicks = 0;
+            gpl->m_fields->m_checkpointTicks.clear();
+        }
+
+        // Explicit resetLevel to start from the beginning cleanly.
+        // If togglePracticeMode already reset, this is a quick no-op reset.
+        pl->resetLevel();
     }
 
     void onToggleGhostVisibility(CCObject* sender) {
@@ -645,9 +706,14 @@ public:
 
         m_colorEditIdx = idx;
 
+        // Fix (color picker use-after-free): retain self for the duration of
+        // the callback so GhostPopup cannot be freed while the ColorPickPopup
+        // is still open and the lambda holds a raw `this` pointer.
+        this->retain();
         auto popup = ColorPickPopup::create(ghosts[idx].color);
         popup->setCallback([this](cocos2d::ccColor4B color) {
             this->updateColorValue({color.r, color.g, color.b});
+            this->release(); // paired with the retain above
         });
         popup->show();
     }
