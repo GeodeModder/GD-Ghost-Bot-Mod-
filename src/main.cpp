@@ -264,16 +264,24 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         return true;
     }
 
-    // FIXED: Added an exit hook override to wipe tracking metrics so states never spill into separate levels
     void onExit() {
         PlayLayer::onExit();
         GhostManager::get()->clearVolatileBuffers();
     }
 
-    void processCommands(float dt, bool isHalfTick, bool isLastTick) {
-        PlayLayer::processCommands(dt, isHalfTick, isLastTick);
+    // FIXED: Shifted all capture frame mechanics out of processCommands and into the universal update loop
+    void update(float dt) {
+        PlayLayer::update(dt);
         if (!m_player1) return;
 
+        // 🚨 LIVE CONSOLE DEBUGGING TOOL
+        // Throttled print statement so it won't lag your game, but confirms activity every 60 frames
+        static int logThrottle = 0;
+        if (GhostManager::get()->isRecording() && logThrottle++ % 60 == 0) {
+            log::info("Ghost System Active | Current Buffer Frame Count: {}", GhostManager::get()->getRecordingBuffer().size());
+        }
+
+        // Handle player crash re-tracking & checkpoint scrubbing
         if (m_player1->m_isDead) {
             m_fields->m_wasDeadLastFrame = true;
             return;
@@ -296,6 +304,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             }
         }
 
+        // Live Coordinate Sampling
         if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
             GhostManager::get()->getRecordingBuffer().push_back({
                 m_fields->m_physicsTicks,
@@ -305,13 +314,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             });
         }
 
-        m_fields->m_physicsTicks++;
-    }
-
-    void update(float dt) {
-        PlayLayer::update(dt);
-        if (!m_player1 || m_player1->m_isDead) return;
-
+        // Active Route Ghost Processing/Interpolation Loop
         auto& routes = GhostManager::get()->getActiveGhosts();
         for (auto const& ghostData : routes) {
             if (!ghostData.isEnabled || ghostData.frames.empty()) continue;
@@ -352,6 +355,8 @@ struct $modify(GhostPlayLayer, PlayLayer) {
                 ghostSprite->setVisible(false);
             }
         }
+
+        m_fields->m_physicsTicks++;
     }
 
     void executeUnifiedSaveFlow() {
@@ -392,7 +397,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
 void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     auto& buffer = GhostManager::get()->getRecordingBuffer();
 
-    // FIXED: Added ChatGPT's debug notification hook to expose exactly how many vectors were logged
     Notification::create(
         fmt::format("Saving Route... Frames Captured: {}", buffer.size()),
         NotificationIcon::Info
@@ -489,7 +493,6 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) {
             commitGhostToDiskAndMemory(m_levelID, textResult);
         }
     } else { 
-        // FIXED: Allows mid-level manual save cancels to release the lock cleanly so users can safely unpause and keep recording
         if (!m_isRenameMode) {
             if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
                 pl->m_fields->m_saveFlowTriggered = false;
@@ -499,6 +502,7 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) {
         }
     }
 }
+
 // ==========================================
 // 🎛️ SYSTEM DASHBOARD POPUP INTERFACE
 // ==========================================
