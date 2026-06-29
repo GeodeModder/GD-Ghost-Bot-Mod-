@@ -194,6 +194,15 @@ protected:
 
     bool init(int levelID, bool isRenameMode, size_t editIndex, GhostPopup* parentPopup);
 
+    // setTouchPriority() called in init() is too early — FLAlertLayer registers
+    // its touch handler in onEnter(), which overwrites any priority set before.
+    // Override onEnter() to force priority AFTER base registration.
+    void onEnter() override {
+        FLAlertLayer::onEnter();
+        this->setTouchPriority(-500);
+        if (m_buttonMenu) m_buttonMenu->setTouchPriority(-501);
+    }
+
 public:
     static GhostNameDialog* create(int levelID, bool isRenameMode, size_t editIndex = 0, GhostPopup* parentPopup = nullptr) {
         auto ret = new GhostNameDialog();
@@ -217,10 +226,8 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         // Guards against playEndAnimationToPos firing spuriously during
         // togglePracticeMode / resetLevel inside onInitiateRecordAction.
         bool m_isResetting = false;
-        bool m_recordStartPending = false;
-        // Set alongside m_recordStartPending; cleared on the first handled
-        // respawn so the transient dead state at recording start doesn't wipe
-        // the fresh buffer.
+        // Set true when recording starts; prevents the first transient
+        // dead→alive transition (from the reset) from wiping the buffer.
         bool m_justStartedRecording = false;
         std::unordered_map<std::string, SimplePlayer*> m_ghostSprites; 
     };
@@ -265,7 +272,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_wasDeadLastFrame = false;
         m_fields->m_saveFlowTriggered = false;
         m_fields->m_isResetting = false;
-        m_fields->m_recordStartPending = false;
         m_fields->m_justStartedRecording = false;
 
         GhostManager::get()->loadMacroFramework(level->m_levelID);
@@ -276,17 +282,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     void update(float dt) {
         PlayLayer::update(dt);
         if (!m_player1) return;
-
-        if (m_fields->m_recordStartPending) {
-            m_fields->m_recordStartPending = false;
-            m_fields->m_isResetting = false;
-            m_fields->m_saveFlowTriggered = false;
-            m_fields->m_physicsTicks = 0;
-            m_fields->m_checkpointTicks.clear();
-            m_fields->m_wasDeadLastFrame = false;
-            m_fields->m_justStartedRecording = true; // blocks transient respawn-clear
-            GhostManager::get()->getRecordingBuffer().clear();
-        }
 
         // Throttled debug log (fires every 60 frames)
         static int logThrottle = 0;
@@ -525,10 +520,6 @@ bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex, Gho
         return false;
     }
 
-    // Force a very high touch priority so the dialog swallows touches before the
-    // level-complete end screen / leaderboard behind it.
-    this->setTouchPriority(-10000);
-
     m_levelID = levelID;
     m_isRenameMode = isRenameMode;
     m_editIndex = editIndex;
@@ -730,19 +721,17 @@ public:
             pl->resetLevel();
         }
 
-        // Override any field state the internal resets may have written.
-        // This must happen AFTER all resets — that's the whole point of Bug 1.
-        // NOTE: m_wasDeadLastFrame MUST also be cleared here. If the player
-        // was dead before pausing, it will be true, and the very first update()
-        // after resume will hit the "respawn with no checkpoints" branch and
-        // wipe the buffer even though we just started recording.
-        if (gpl) {
-            gpl->m_fields->m_isResetting      = true;
-            gpl->m_fields->m_saveFlowTriggered = false; // critical — keeps frame capture open
-            gpl->m_fields->m_physicsTicks      = 0;
-            gpl->m_fields->m_checkpointTicks.clear();
-            gpl->m_fields->m_wasDeadLastFrame  = false; // prevent buffer-wipe on first live frame
-            gpl->m_fields->m_recordStartPending = true;
+        // Re-fetch PlayLayer after the reset — togglePracticeMode can recreate
+        // the PlayLayer node entirely, making the original `gpl` pointer stale.
+        // Using PlayLayer::get() here always gives us the live instance.
+        if (auto freshPl = PlayLayer::get()) {
+            auto freshGpl = static_cast<GhostPlayLayer*>(freshPl);
+            freshGpl->m_fields->m_isResetting       = false; // allow save flow
+            freshGpl->m_fields->m_saveFlowTriggered  = false;
+            freshGpl->m_fields->m_physicsTicks       = 0;
+            freshGpl->m_fields->m_checkpointTicks.clear();
+            freshGpl->m_fields->m_wasDeadLastFrame   = false;
+            freshGpl->m_fields->m_justStartedRecording = true;
         }
 
         Notification::create("Recording started! Play to the end to save.", NotificationIcon::Success)->show();
