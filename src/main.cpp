@@ -218,6 +218,10 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         // togglePracticeMode / resetLevel inside onInitiateRecordAction.
         bool m_isResetting = false;
         bool m_recordStartPending = false;
+        // Set alongside m_recordStartPending; cleared on the first handled
+        // respawn so the transient dead state at recording start doesn't wipe
+        // the fresh buffer.
+        bool m_justStartedRecording = false;
         std::unordered_map<std::string, SimplePlayer*> m_ghostSprites; 
     };
 
@@ -262,6 +266,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_saveFlowTriggered = false;
         m_fields->m_isResetting = false;
         m_fields->m_recordStartPending = false;
+        m_fields->m_justStartedRecording = false;
 
         GhostManager::get()->loadMacroFramework(level->m_levelID);
         initializeRenderPool();
@@ -279,6 +284,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             m_fields->m_physicsTicks = 0;
             m_fields->m_checkpointTicks.clear();
             m_fields->m_wasDeadLastFrame = false;
+            m_fields->m_justStartedRecording = true; // blocks transient respawn-clear
             GhostManager::get()->getRecordingBuffer().clear();
         }
 
@@ -302,7 +308,13 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         // Handle respawn after death — rewind recording to last checkpoint
         if (m_fields->m_wasDeadLastFrame && !m_player1->m_isDead) {
             m_fields->m_wasDeadLastFrame = false;
-            if (!m_fields->m_checkpointTicks.empty()) {
+
+            // If recording just started, the player may have been in a transient
+            // dead state during reset. Don't treat that as a real respawn.
+            if (m_fields->m_justStartedRecording) {
+                m_fields->m_justStartedRecording = false;
+                // keep the fresh buffer and the tick count from the reset
+            } else if (!m_fields->m_checkpointTicks.empty()) {
                 m_fields->m_physicsTicks = m_fields->m_checkpointTicks.back(); 
 
                 if (GhostManager::get()->isRecording()) {
@@ -325,6 +337,17 @@ struct $modify(GhostPlayLayer, PlayLayer) {
                 m_player1->getPositionY(),
                 m_player1->getRotation()
             });
+
+            // Milestone notifications — visible proof that frames are being
+            // captured mid-run without needing the Geode log. If you never see
+            // the "1 frame" notification, update() isn't recording at all.
+            auto sz = GhostManager::get()->getRecordingBuffer().size();
+            if (sz == 1 || sz == 60 || sz == 300) {
+                Notification::create(
+                    fmt::format("Recording: {} frames captured", sz),
+                    NotificationIcon::Info
+                )->show();
+            }
         }
 
         // Ghost playback
@@ -496,6 +519,10 @@ bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex, Gho
     if (!FLAlertLayer::init(this, isRenameMode ? "Rename Route" : "Save Route", "", "Cancel", "Confirm", 320.f, false, 140.f, 0.8f)) {
         return false;
     }
+
+    // Force a very high touch priority so the dialog swallows touches before the
+    // level-complete end screen / leaderboard behind it.
+    this->setTouchPriority(-10000);
 
     m_levelID = levelID;
     m_isRenameMode = isRenameMode;
