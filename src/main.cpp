@@ -456,7 +456,6 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
         if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
             pl->m_fields->m_saveFlowTriggered = false;
             pl->m_fields->m_isResetting = false;
-            pl->m_fields->m_recordStartPending = false;
         }
         Notification::create("No frames were recorded. Route was not saved.", NotificationIcon::Error)->show();
         return;
