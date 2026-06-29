@@ -329,6 +329,11 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             }
         }
 
+        // If recording started on a clean alive frame, the guard above never
+        // fires. Make sure the one-shot startup flag is cleared so the first
+        // real death/respawn later still gets normal checkpoint rewind.
+        m_fields->m_justStartedRecording = false;
+
         // Record frame
         if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
             GhostManager::get()->getRecordingBuffer().push_back({
